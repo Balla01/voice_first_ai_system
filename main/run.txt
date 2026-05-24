@@ -1,3 +1,28 @@
+New Implementation
+*** **************
+DUMP DATA : main\src\run_pipeline.py
+==== ====
+
+main file => for complete flow
+main.py
+
+
+
+cd C:\projects\audio_transition_projects\voice_first_ai_system\main\src
+
+python run_data_dump.py          # PDF → chunks.json
+python run_pipeline.py           # PDF → embed → Qdrant
+python check_db.py               # inspect DB
+python delete_rows.py            # delete rows 0-24
+python history/test_history.py   # 10-query history test
+
+
+
+
+
+
+
+
 # faster-whisper (default, fastest on CPU)
 python app.py
 

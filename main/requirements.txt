@@ -1,0 +1,11 @@
+# PDF Processing
+pdfplumber>=0.10.0
+# Embeddings
+sentence-transformers>=2.2.0
+# Vector DB
+qdrant-client>=1.7.0
+# LLM API
+groq>=0.4.0
+# Environment & Config
+python-dotenv>=1.0.0
+scipy>=1.7.0

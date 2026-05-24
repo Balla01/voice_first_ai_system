@@ -1,0 +1,384 @@
+"""
+Runtime History Pipeline
+
+Two collections:
+  1. runtime_history  — in-memory Qdrant (QdrantClient(":memory:"))
+                        Fast retrieval during active session.
+                        Evicts oldest chunks to summary DB when RAM cap is hit.
+
+  2. session_summaries — persistent Qdrant (disk)
+                         Receives summarized chunks on eviction and on session end.
+
+Each point is tagged with session_id + customer_id for filtered retrieval.
+"""
+
+import gc
+import os
+import sys
+from pathlib import Path
+from datetime import datetime
+from typing import List, Tuple
+
+from dotenv import load_dotenv
+from groq import Groq
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance, VectorParams, PointStruct, HnswConfigDiff,
+    Filter, FieldCondition, MatchValue,
+    PointIdsList, OrderBy, Direction,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from constants import (
+    EMBED_DIR, EMBEDDING_MODEL, EMBEDDING_DIM,
+    QDRANT_HNSW_M, QDRANT_HNSW_EF_CONSTRUCT,
+    HISTORY_COLLECTION, SUMMARY_COLLECTION,
+    MAX_HISTORY_CHUNKS, EVICT_COUNT,
+    GROQ_MODEL, EMBED_BATCH_SIZE,
+    CLEAR_RUNTIME_HISTORY,
+)
+
+# Separate sub-folder so history DB and summary DB don't share the same
+# Qdrant storage when both are persistent.
+HISTORY_DB_DIR = EMBED_DIR / "history"
+
+load_dotenv()
+
+
+# ── Embedding model (loaded once, shared across the session) ──────────────────
+
+_model: SentenceTransformer = None
+
+def _get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        print(f"Loading embedding model: {EMBEDDING_MODEL}")
+        _model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
+        _model[0].auto_model.config.unpad_inputs = False
+        print("Model ready.")
+    return _model
+
+def _embed(texts: List[str]) -> List[List[float]]:
+    model = _get_model()
+    arr = model.encode(
+        texts,
+        batch_size=EMBED_BATCH_SIZE,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    result = arr.tolist()
+    del arr
+    return result
+
+
+# ── Groq LLM ─────────────────────────────────────────────────────────────────
+
+def _summarize_via_llm(chunks: List[str]) -> str:
+    """Call Groq to summarize a list of conversation chunks."""
+    api_key = os.getenv("groq_api")
+    if not api_key:
+        return "[summary unavailable — groq_api not set]"
+
+    conversation = "\n---\n".join(chunks)
+    client = Groq(api_key=api_key)
+    completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a concise summarizer. "
+                    "Summarize the following conversation turns into a single, "
+                    "dense paragraph capturing key topics, decisions, and context."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Conversation:\n{conversation[:4000]}",
+            },
+        ],
+        temperature=0.3,
+        max_completion_tokens=512,
+        top_p=1,
+        stream=False,
+    )
+    return completion.choices[0].message.content.strip()
+
+
+# ── RuntimeHistory ────────────────────────────────────────────────────────────
+
+class RuntimeHistory:
+    """
+    Manages conversation history for one session.
+
+    history_client  — in-memory Qdrant, fast retrieval
+    summary_client  — persistent Qdrant on disk, survives restarts
+    """
+
+    def __init__(self, session_id: str, customer_id: str):
+        self.session_id  = session_id
+        self.customer_id = customer_id
+        self._id_counter = 0   # always incrementing, never reused → no collision on evict
+
+        # Runtime history: RAM-only when CLEAR_RUNTIME_HISTORY=True,
+        # persistent disk when False (survives restarts, queryable later).
+        if CLEAR_RUNTIME_HISTORY:
+            self.history_client = QdrantClient(":memory:")
+        else:
+            HISTORY_DB_DIR.mkdir(parents=True, exist_ok=True)
+            self.history_client = QdrantClient(path=str(HISTORY_DB_DIR))
+        self._create_collection(self.history_client, HISTORY_COLLECTION)
+
+        # Summary collection — always persistent on disk
+        EMBED_DIR.mkdir(parents=True, exist_ok=True)
+        self.summary_client = QdrantClient(path=str(EMBED_DIR))
+        self._create_collection(self.summary_client, SUMMARY_COLLECTION)
+
+        mode = "RAM (wiped on session end)" if CLEAR_RUNTIME_HISTORY else f"disk ({HISTORY_DB_DIR})"
+        print(f"Session started  | session_id={session_id} | customer_id={customer_id}")
+        print(f"History mode     | {mode}")
+
+    # ── Collection setup ─────────────────────────────────────────────────────
+
+    def _create_collection(self, client: QdrantClient, name: str):
+        existing = {c.name for c in client.get_collections().collections}
+        if name not in existing:
+            client.create_collection(
+                collection_name=name,
+                vectors_config=VectorParams(
+                    size=EMBEDDING_DIM,
+                    distance=Distance.COSINE,
+                ),
+                hnsw_config=HnswConfigDiff(
+                    m=QDRANT_HNSW_M,
+                    ef_construct=QDRANT_HNSW_EF_CONSTRUCT,
+                ),
+            )
+
+    # ── Filters ──────────────────────────────────────────────────────────────
+
+    def _session_filter(self) -> Filter:
+        return Filter(must=[
+            FieldCondition(key="session_id",  match=MatchValue(value=self.session_id)),
+            FieldCondition(key="customer_id", match=MatchValue(value=self.customer_id)),
+        ])
+
+    # ── Add message ──────────────────────────────────────────────────────────
+
+    def add(self, role: str, content: str):
+        """
+        Add one conversation turn to runtime history.
+        role: "user" or "assistant"
+        Triggers eviction check after every insert.
+        """
+        vector = _embed([content])[0]
+        point_id = self._id_counter
+        self._id_counter += 1
+
+        self.history_client.upsert(
+            collection_name=HISTORY_COLLECTION,
+            points=[PointStruct(
+                id=point_id,
+                vector=vector,
+                payload={
+                    "session_id":  self.session_id,
+                    "customer_id": self.customer_id,
+                    "role":        role,
+                    "content":     content,
+                    "turn":        point_id,
+                    "timestamp":   datetime.now().isoformat(),
+                },
+            )],
+            wait=True,
+        )
+        self._check_evict()
+
+    # ── Retrieve ─────────────────────────────────────────────────────────────
+
+    def retrieve(self, query: str, k: int = 5) -> List[str]:
+        """
+        Semantic search over runtime history filtered by session + customer.
+        Returns top-k matching content strings.
+        """
+        vector = _embed([query])[0]
+        response = self.history_client.query_points(
+            collection_name=HISTORY_COLLECTION,
+            query=vector,
+            query_filter=self._session_filter(),
+            limit=k,
+            with_payload=True,
+        )
+        return [r.payload["content"] for r in response.points]
+
+    # ── Eviction ─────────────────────────────────────────────────────────────
+
+    def _check_evict(self):
+        """Evict oldest chunks if history exceeds MAX_HISTORY_CHUNKS."""
+        count = self.history_client.count(HISTORY_COLLECTION).count
+        if count > MAX_HISTORY_CHUNKS:
+            print(f"  [history] RAM cap reached ({count}/{MAX_HISTORY_CHUNKS}) — evicting {EVICT_COUNT} oldest chunks")
+            self._evict(EVICT_COUNT)
+
+    def _evict(self, n: int):
+        """
+        Take the n oldest chunks (lowest turn IDs) for this session,
+        summarize them, save to summary DB, then delete from RAM.
+        """
+        oldest, _ = self.history_client.scroll(
+            collection_name=HISTORY_COLLECTION,
+            scroll_filter=self._session_filter(),
+            limit=n,
+            order_by=OrderBy(key="turn", direction=Direction.ASC),
+            with_vectors=False,
+            with_payload=True,
+        )
+
+        if not oldest:
+            return
+
+        texts = [
+            f"[{p.payload['role']}]: {p.payload['content']}"
+            for p in oldest
+        ]
+        summary = _summarize_via_llm(texts)
+        self._save_summary(summary, reason="eviction", chunk_count=len(oldest))
+
+        ids_to_delete = [p.id for p in oldest]
+        self.history_client.delete(
+            collection_name=HISTORY_COLLECTION,
+            points_selector=PointIdsList(points=ids_to_delete),
+            wait=True,
+        )
+        print(f"  [history] Evicted {len(ids_to_delete)} chunks → summarized → summary DB")
+        gc.collect()
+
+    # ── Session end ───────────────────────────────────────────────────────────
+
+    def end_session(self):
+        """
+        Summarize all remaining history for this session and save to summary DB.
+
+        CLEAR_RUNTIME_HISTORY = True  → history was in RAM; it disappears on close().
+        CLEAR_RUNTIME_HISTORY = False → history stays on disk; turns remain queryable
+                                        via session_id/customer_id filter for future sessions.
+        """
+        remaining, _ = self.history_client.scroll(
+            collection_name=HISTORY_COLLECTION,
+            scroll_filter=self._session_filter(),
+            limit=MAX_HISTORY_CHUNKS + EVICT_COUNT + 10,
+            order_by=OrderBy(key="turn", direction=Direction.ASC),
+            with_vectors=False,
+            with_payload=True,
+        )
+
+        if remaining:
+            texts = [
+                f"[{p.payload['role']}]: {p.payload['content']}"
+                for p in remaining
+            ]
+            summary = _summarize_via_llm(texts)
+            self._save_summary(summary, reason="session_end", chunk_count=len(remaining))
+            print(f"  [session] Summarized {len(remaining)} remaining chunks → summary DB")
+
+        if CLEAR_RUNTIME_HISTORY:
+            print(f"  [session] History cleared from RAM (CLEAR_RUNTIME_HISTORY=True)")
+        else:
+            count = self.history_client.count(HISTORY_COLLECTION).count
+            print(f"  [session] History kept on disk — {count} turns remain (CLEAR_RUNTIME_HISTORY=False)")
+
+        print(f"Session ended    | session_id={self.session_id} | customer_id={self.customer_id}")
+
+    # ── Save summary ──────────────────────────────────────────────────────────
+
+    def _save_summary(self, summary: str, reason: str, chunk_count: int):
+        """Embed summary and upsert to persistent summary collection."""
+        vector = _embed([summary])[0]
+
+        # Summary collection is never deleted from, so count() == next safe ID.
+        next_id = self.summary_client.count(SUMMARY_COLLECTION).count
+
+        self.summary_client.upsert(
+            collection_name=SUMMARY_COLLECTION,
+            points=[PointStruct(
+                id=next_id,
+                vector=vector,
+                payload={
+                    "session_id":   self.session_id,
+                    "customer_id":  self.customer_id,
+                    "summary":      summary,
+                    "reason":       reason,        # "eviction" | "session_end"
+                    "chunk_count":  chunk_count,
+                    "timestamp":    datetime.now().isoformat(),
+                },
+            )],
+            wait=True,
+        )
+
+    # ── Scored search methods (return (text, score, timestamp) tuples) ────────
+
+    def get_recent_history(self, n: int = 5) -> List[str]:
+        """
+        Return the n most recent conversation turns (text only) for this session,
+        ordered oldest-first so they read chronologically in context.
+        """
+        results, _ = self.history_client.scroll(
+            collection_name=HISTORY_COLLECTION,
+            scroll_filter=self._session_filter(),
+            limit=n,
+            order_by=OrderBy(key="turn", direction=Direction.DESC),
+            with_vectors=False,
+            with_payload=True,
+        )
+        # results come back newest-first; reverse so context reads in order
+        turns = [
+            f"[{p.payload['role']}]: {p.payload['content']}"
+            for p in reversed(results)
+        ]
+        return turns
+
+    def search_history_scored(self, query_vec: List[float], k: int = 5) -> List[tuple]:
+        response = self.history_client.query_points(
+            collection_name=HISTORY_COLLECTION,
+            query=query_vec,
+            query_filter=self._session_filter(),
+            limit=k,
+            with_payload=True,
+        )
+        return [
+            (r.payload["content"], r.score, r.payload.get("timestamp", ""))
+            for r in response.points
+        ]
+
+    def search_summary_scored(self, query_vec: List[float], k: int = 5) -> List[tuple]:
+        response = self.summary_client.query_points(
+            collection_name=SUMMARY_COLLECTION,
+            query=query_vec,
+            query_filter=self._session_filter(),
+            limit=k,
+            with_payload=True,
+        )
+        return [
+            (r.payload["summary"], r.score, r.payload.get("timestamp", ""))
+            for r in response.points
+        ]
+
+    def search_docs_scored(self, query_vec: List[float], k: int = 5) -> List[tuple]:
+        from constants import QDRANT_COLLECTION
+        try:
+            response = self.summary_client.query_points(
+                collection_name=QDRANT_COLLECTION,
+                query=query_vec,
+                limit=k,
+                with_payload=True,
+            )
+            return [(r.payload.get("text", ""), r.score, "") for r in response.points]
+        except Exception:
+            return []
+
+    # ── Cleanup ───────────────────────────────────────────────────────────────
+
+    def close(self):
+        self.history_client.close()
+        self.summary_client.close()
