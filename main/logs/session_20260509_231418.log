@@ -1,0 +1,60 @@
+23:14:18.576 | Loading embedding model ...
+23:14:18.586 | No device provided, using cpu
+23:14:19.248 | Loading SentenceTransformer model from Alibaba-NLP/gte-large-en-v1.5.
+23:14:29.790 | Embedding model ready.
+23:14:30.566 | HTTP Request: GET http://127.0.0.1:7860/gradio_api/startup-events "HTTP/1.1 200 OK"
+23:14:30.603 | HTTP Request: HEAD http://127.0.0.1:7860/ "HTTP/1.1 200 OK"
+23:14:31.001 | HTTP Request: GET https://api.gradio.app/pkg-version "HTTP/1.1 200 OK"
+23:14:40.961 | ==================== SESSION 231440961 STARTED ====================
+23:14:52.661 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:14:52.675 | [231440961] Cycle #001 | chunk=11.7s | embed=5704ms | search=4ms | llm=757ms | total=6466ms | avg=6466ms
+23:14:52.675 |   chunk   : Hi. Good morning. There is a person called Rakesh.
+23:14:52.676 |   suggest : Based on the context, here are 3 short, actionable suggestions for the agent:  1. Ask Rakesh about his current role and responsibilities to gauge his level of involvement in Intelligent Systems Engine
+23:14:52.676 |   ----------------------------------------------------------------
+23:14:53.048 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:14:53.049 | [231440961] Cycle #002 | chunk=6.8s | embed=116ms | search=1ms | llm=255ms | total=373ms | avg=3419ms
+23:14:53.049 |   chunk   : We need to know from where he have studied.
+23:14:53.049 |   suggest : Here are 3 short, actionable suggestions for the agent:  1. Ask Rakesh to elaborate on how his statistics background has influenced his approach to data science, citing specific examples from his proj
+23:14:53.049 |   ----------------------------------------------------------------
+23:14:57.114 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:14:57.115 | [231440961] Cycle #003 | chunk=5.4s | embed=95ms | search=1ms | llm=277ms | total=374ms | avg=2404ms
+23:14:57.116 |   chunk   : Because knowing her
+23:14:57.116 |   suggest : Based on the conversation, here are 3 short, actionable suggestions for the agent:  1. Ask follow-up questions to clarify what "knowing her" means in the context of the policy, to ensure understanding
+23:14:57.116 |   ----------------------------------------------------------------
+23:15:02.807 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:02.808 | [231440961] Cycle #004 | chunk=6.1s | embed=106ms | search=1ms | llm=475ms | total=582ms | avg=1949ms
+23:15:02.809 |   chunk   : and what is his profession might be
+23:15:02.809 |   suggest : Based on the conversation and policy context, here are 3 short, actionable suggestions for the agent:  1. Ask Rakesh about his experience working with high-stakes AI applications in finance and bankin
+23:15:02.809 |   ----------------------------------------------------------------
+23:15:13.184 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:13.184 | [231440961] Cycle #005 | chunk=11.0s | embed=105ms | search=1ms | llm=346ms | total=453ms | avg=1649ms
+23:15:13.186 |   chunk   : So yes,
+23:15:13.186 |   suggest : Based on the conversation, here are 3 short, actionable suggestions for the agent:  1. Ask for clarification on what the customer means by "yes" to understand their level of agreement or interest. 2. 
+23:15:13.186 |   ----------------------------------------------------------------
+23:15:18.641 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:18.642 | [231440961] Cycle #006 | chunk=5.9s | embed=102ms | search=1ms | llm=323ms | total=427ms | avg=1446ms
+23:15:18.642 |   chunk   : And we also know about his
+23:15:18.642 |   suggest : Here are 3 short, actionable suggestions for the agent:  1. Highlight Rakesh's experience in high-stakes environments to emphasize the value of his skills in our company's AI solutions. 2. Ask follow-
+23:15:18.642 |   ----------------------------------------------------------------
+23:15:24.008 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:24.009 | [231440961] Cycle #007 | chunk=5.8s | embed=98ms | search=1ms | llm=230ms | total=329ms | avg=1286ms
+23:15:24.011 |   chunk   : number of years of experience.
+23:15:24.011 |   suggest : However, it seems like the conversation just started and there's no information about the policy or Rakesh's experience. Could you please provide more context or continue the conversation so I can ass
+23:15:24.011 |   ----------------------------------------------------------------
+23:15:34.098 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:34.099 | [231440961] Cycle #008 | chunk=10.4s | embed=99ms | search=1ms | llm=265ms | total=366ms | avg=1171ms
+23:15:34.099 |   chunk   : So
+23:15:34.099 |   suggest : I'm not aware of the conversation context. Please provide more information about the conversation, such as the customer's words or the agent's previous statements.
+23:15:34.099 |   ----------------------------------------------------------------
+23:15:39.652 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:39.654 | [231440961] Cycle #009 | chunk=5.9s | embed=130ms | search=1ms | llm=321ms | total=452ms | avg=1091ms
+23:15:39.654 |   chunk   : I have to know about his professional experience.
+23:15:39.654 |   suggest : Here are 3 short, actionable suggestions for the agent:  1. Ask Rakesh to elaborate on his experience with AI deployment in high-stakes environments, such as finance and banking. 2. Inquire about spec
+23:15:39.654 |   ----------------------------------------------------------------
+23:15:44.676 | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+23:15:44.677 | [231440961] Cycle #010 | chunk=5.5s | embed=95ms | search=1ms | llm=335ms | total=431ms | avg=1025ms
+23:15:44.677 |   chunk   : In his field.
+23:15:44.678 |   suggest : Based on the conversation and policy context, here are 3 short, actionable suggestions for the agent:  1. Highlight Rakesh's experience in high-stakes environments to emphasize his ability to handle c
+23:15:44.678 |   ----------------------------------------------------------------
+23:16:01.343 | ==================== SESSION 231440961 ENDED | duration=80.4s | cycles=10 ====================
+

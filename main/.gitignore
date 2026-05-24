@@ -1,0 +1,96 @@
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+*.cab
+*.msi
+*.msix
+*.msBundle
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+.tmp/
+
+# Database & Cache
+*.db
+*.sqlite
+*.sqlite3
+*.cache
+*.pkl
+
+# IDE specific
+*.iml
+.gradle
+.idea/
+*.iws
+*.iml
+
+# Node (if used)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# MacOS
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
