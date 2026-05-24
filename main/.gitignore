@@ -60,6 +60,10 @@ Thumbs.db
 logs/
 *.log.*
 
+# Project-specific directories
+models/
+embed/
+
 # Temporary files
 *.tmp
 *.temp
