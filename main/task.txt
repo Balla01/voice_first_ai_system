@@ -1,5 +1,9 @@
-1) summary db verify (done)
+1) summary db verify ☑ 
 2) how the data is dumped in the Run time memory (hstory collection)
-is this summary works like, what all data present in that {Run time memory (hstory collection)} is made into summary and dumped into a DB
-3) in case of {CLEAR_RUNTIME_HISTORY = False} => how the data is maintained and dumped in DB, because , the data in the Run time , might be belongs to two different sessions => in this case how the summary is maintained (not a realtime problem, because in real time we make it to 'true')
-4) 
+    is this summary works like, what all data present in that {Run time memory (hstory collection)} is 
+    made into summary and dumped into a DB
+3) in case of {CLEAR_RUNTIME_HISTORY = False} => how the data is maintained and 
+    dumped in DB, because , the data in the Run time , might be belongs to two 
+    different sessions => in this case how the summary is maintained (not a realtime problem,
+    because in real time we make it to 'true')
+4) summary collection => need to semantic chunking for dumping 
