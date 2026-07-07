@@ -1,0 +1,206 @@
+{
+"insurance_plans":[
+  {
+    "id": 1,
+    "question": "What is the primary purpose of LIC's Endowment Plans listed on the Insurance Plan page?"
+  },
+  {
+    "id": 2,
+    "question": "Which broad categories of life insurance plans are shown under LIC's Insurance Plans section (e.g., Endowment, Whole Life, Money Back, Term Assurance)?"
+  },
+  {
+    "id": 3,
+    "question": "What is the main difference in benefit timing between an Endowment Plan and a Term Assurance Plan in LIC's catalog?"
+  },
+  {
+    "id": 4,
+    "question": "Which LIC plan category is designed to provide periodic survival benefits before maturity (e.g., New Money Back Plan 20 Years, New Money Back Plan 25 Years)?"
+  },
+  {
+    "id": 5,
+    "question": "Why are Whole Life Plans like LIC's Jeevan Umang and LIC's Jeevan Utsav typically held for a longer duration than standard Endowment Plans?"
+  },
+  {
+    "id": 6,
+    "question": "What is the basic risk that LIC's Term Assurance Plans (such as Digi Term or New Tech-Term) are designed to cover?"
+  },
+  {
+    "id": 7,
+    "question": "Why might a customer choose a Money Back Plan instead of a simple Endowment Plan from LIC?"
+  },
+  {
+    "id": 8,
+    "question": "What is the general role of Riders in LIC's Insurance Plans portfolio?"
+  },
+  {
+    "id": 9,
+    "question": "Why does LIC list Micro Insurance Plans separately from its other main insurance plan categories?"
+  },
+  {
+    "id": 10,
+    "question": "What is the broad difference between 'Insurance Plans' and 'Pension Plans' in LIC's product structure?"
+  },
+  {
+    "id": 11,
+    "question": "How does an Endowment Plan from LIC typically combine savings and protection for a policyholder over a fixed policy term?"
+  },
+  {
+    "id": 12,
+    "question": "In LIC's Money Back Plans, how do periodic survival benefits influence liquidity for the policyholder during the policy term?"
+  },
+  {
+    "id": 13,
+    "question": "Why might a young salaried individual prefer a pure Term Assurance Plan like LIC's Digi Term instead of a participating Endowment Plan?"
+  },
+  {
+    "id": 14,
+    "question": "What is the functional difference between a Whole Life Plan and a Term Assurance Plan in terms of coverage duration?"
+  },
+  {
+    "id": 15,
+    "question": "How do LIC's Unit Linked Plans (ULIPs) conceptually differ from traditional participating Endowment Plans in terms of investment risk?"
+  },
+  {
+    "id": 16,
+    "question": "Why does LIC offer separate Pension Plans (like Jeevan Akshay or New Jeevan Shanti) instead of using the same structure as standard Endowment Plans for retirement income?"
+  },
+  {
+    "id": 17,
+    "question": "What type of customer need do Micro Insurance Plans under LIC typically aim to address compared to regular Insurance Plans?"
+  },
+  {
+    "id": 18,
+    "question": "How can Riders such as Accidental Death Benefit or Critical Illness Riders modify the risk coverage of a base LIC plan?"
+  },
+  {
+    "id": 19,
+    "question": "In the context of LIC's product hierarchy, why is it useful to tag each plan with a category (Endowment, Whole Life, Money Back, Term, ULIP, Pension)?"
+  },
+  {
+    "id": 20,
+    "question": "How might LIC's children's plans (such as children's money back or education-focused plans) sit logically within the broader Insurance Plan categories?"
+  },
+  {
+    "id": 21,
+    "question": "Given a user who wants guaranteed maturity value plus life cover, how would you decide between an LIC Endowment Plan and a Money Back Plan, purely from a product-structure perspective?"
+  },
+  {
+    "id": 22,
+    "question": "If a customer’s primary goal is lifelong income with a survival benefit stream, how would you conceptually distinguish between suggesting a Whole Life Plan versus a Pension Plan from LIC?"
+  },
+  {
+    "id": 23,
+    "question": "For a RAG system answering LIC policy questions, why is it risky to rely only on textual brochure chunks for premium-related answers instead of separating table data into structured storage?"
+  },
+  {
+    "id": 24,
+    "question": "How would you design metadata fields so that a retrieval query can distinguish between LIC's Term Assurance Plans and Endowment Plans even if the user mentions only 'policy' in the question?"
+  },
+  {
+    "id": 25,
+    "question": "In LIC's portfolio, how does combining a base Endowment Plan with multiple Riders complicate the RAG retrieval logic for coverage explanations and claim conditions?"
+  },
+  {
+    "id": 26,
+    "question": "When ingesting LIC's Insurance Plans into a vector database, why is it important to separate chunks by semantic sections (like 'Benefits', 'Eligibility', 'Premium Table') instead of fixed token windows?"
+  },
+  {
+    "id": 27,
+    "question": "How would you architect query routing so that LIC Pension Plans queries (e.g., annuity options) are answered using pension-specific contexts instead of being mixed with Endowment Plan chunks?"
+  },
+  {
+    "id": 28,
+    "question": "What strategy would you use to handle versioned LIC plan brochures (multiple effective date ranges) in RAG so that users receive answers aligned with the correct time period?"
+  },
+  {
+    "id": 29,
+    "question": "In a LIC policy RAG system, how would you handle a question where the user only gives a partial plan name (e.g., 'Jeevan') but multiple categories and products share similar prefixes?"
+  },
+  {
+    "id": 30,
+    "question": "How would you design a hybrid retrieval and structured lookup pipeline so that an LIC policy RAG system can answer both semantic questions (features, benefits) and numeric questions (premium amounts) accurately?"
+  }
+],
+"pension_plans":[
+  {
+    "id": 1,
+    "question": "What is the main purpose of LIC Pension Plans?"
+  },
+  {
+    "id": 2,
+    "question": "Which LIC page is used for pension and retirement products?"
+  },
+  {
+    "id": 3,
+    "question": "What broad category do pension plans belong to in LIC's product lineup?"
+  },
+  {
+    "id": 4,
+    "question": "What is the general meaning of an annuity plan?"
+  },
+  {
+    "id": 5,
+    "question": "Why do people buy pension plans from LIC?"
+  },
+  {
+    "id": 6,
+    "question": "What is the difference between a pension plan and a regular life insurance plan?"
+  },
+  {
+    "id": 7,
+    "question": "What kind of income does a pension plan usually provide after retirement?"
+  },
+  {
+    "id": 8,
+    "question": "What is the role of retirement planning in LIC pension products?"
+  },
+  {
+    "id": 9,
+    "question": "Why are pension plans useful for senior citizens?"
+  },
+  {
+    "id": 10,
+    "question": "What is the basic benefit of choosing a pension product over a savings-only product?"
+  },
+  {
+    "id": 11,
+    "question": "How does LIC's New Jeevan Shanti help in retirement income planning?"
+  },
+  {
+    "id": 12,
+    "question": "Why would someone choose Jeevan Akshay-VII for retirement instead of a standard insurance plan?"
+  },
+  {
+    "id": 13,
+    "question": "What is the key purpose of LIC's New Pension Plus?"
+  },
+  {
+    "id": 14,
+    "question": "How is Saral Pension different from a market-linked retirement product?"
+  },
+  {
+    "id": 15,
+    "question": "Why is Smart Pension considered a retirement-focused LIC product?"
+  },
+  {
+    "id": 16,
+    "question": "What type of need does an immediate annuity plan satisfy?"
+  },
+  {
+    "id": 17,
+    "question": "How do deferred annuity and immediate annuity plans differ in when income starts?"
+  },
+  {
+    "id": 18,
+    "question": "Why might a user ask for a pension plan instead of a whole life plan?"
+  },
+  {
+    "id": 19,
+    "question": "Which LIC pension product names suggest they are meant for guaranteed retirement income?"
+  },
+  {
+    "id": 20,
+    "question": "How should LIC pension plans be grouped in a database for retrieval by retirement need?"
+  }
+]
+}

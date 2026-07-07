@@ -7,12 +7,28 @@ from pathlib import Path
 
 # ── PROJECT PATHS ──
 PROJECT_ROOT = Path(r"C:\projects\audio_transition_projects")
-VOICE_AI_ROOT = PROJECT_ROOT / "voice_first_ai_system" / "main"
+
+# Derived from this file's own location (src/constants.py's grandparent)
+# rather than a hardcoded "voice_first_ai_system/main" string, so it stays
+# correct if this folder is ever moved/renamed again (it already has been
+# once: voice_first_ai_system/main -> voice_first_ai_system/backend/main).
+VOICE_AI_ROOT = Path(__file__).resolve().parent.parent
 
 # ── DATA PATHS ──
 DATA_ROOT = PROJECT_ROOT / "data"
 PDFS_DIR = DATA_ROOT / "pdfs"
 OUTPUT_DIR = DATA_ROOT / "output"
+
+# ── LIC DATA PATH (current main data source) ──
+# Layout:
+#   LIC_ROOT/insurance-plans/<category>/<sub_category-plan_no-UIN>/*.pdf
+#   LIC_ROOT/pension-plans/<sub_category-plan_no-UIN>/*.pdf   (no category level)
+# Only the product types listed in LIC_PRODUCT_TYPES are processed; other
+# sibling folders (micro-insurance-plans, unit-linked-plans, withdrawn-plans, ...)
+# are ignored.
+LIC_ROOT = DATA_ROOT / "LIC"
+LIC_PRODUCT_TYPES = ["insurance-plans", "pension-plans"]
+LIC_PRODUCT_TYPES_WITH_CATEGORY = {"insurance-plans"}  # has an extra category folder level
 
 # ── SRC PATHS ──
 SRC_DIR = VOICE_AI_ROOT / "src"
@@ -20,8 +36,11 @@ DATA_DUMP_DIR = SRC_DIR / "data_dump"
 
 # ── MODELS & EMBEDDINGS ──
 MODELS_DIR = VOICE_AI_ROOT / "models"
-EMBED_DIR = VOICE_AI_ROOT / "embed"
 LOGS_DIR = VOICE_AI_ROOT / "logs"
+
+# Deliberately NOT under VOICE_AI_ROOT/"main" — lives at the voice_first_ai_system
+# top level instead, independent of wherever the "main" code folder itself sits.
+EMBED_DIR = PROJECT_ROOT / "voice_first_ai_system" / "embed_files"
 
 # ── TEXT PROCESSING CONFIG ──
 CHUNK_SIZE = 1000  # Increased from 500 to reduce memory usage
@@ -38,7 +57,11 @@ EMBEDDING_DIM = 1024
 EMBEDDING_DISTANCE = "COSINE"
 
 # ── QDRANT CONFIG ──
-QDRANT_COLLECTION = "insurance_docs"
+# New LIC-sourced collection (insurance-plans + pension-plans, with the richer
+# product_type/category/sub_category/plan_no/uin/doc_type metadata schema).
+# The old 'insurance_docs' collection (pre-LIC-folder-structure data) is left
+# untouched on disk but is no longer read from or written to.
+QDRANT_COLLECTION = "lic_insurance_docs"
 QDRANT_HNSW_M = 16
 QDRANT_HNSW_EF_CONSTRUCT = 100
 
@@ -46,6 +69,10 @@ QDRANT_HNSW_EF_CONSTRUCT = 100
 CHUNKS_JSON_FILE = "chunks.json"
 CHUNKS_TEXT_FILE = "chunks.txt"
 METADATA_JSON_FILE = "metadata.json"
+
+# ── PARQUET MIRROR OF VECTOR DB ──
+# Mirrors exactly what gets upserted into Qdrant (text + metadata, no vectors).
+PARQUET_FILE_NAME = "lic_2_products_db_data.parquet"
 
 # ── FEATURE FLAGS ──
 USE_LLM_ENRICHMENT = False
@@ -78,16 +105,15 @@ QDRANT_UPSERT_BATCH = 100 # points per Qdrant upsert call (safe at any RAM size)
 
 def verify_paths():
     """Verify all required directories exist"""
-    required_dirs = [PROJECT_ROOT, DATA_ROOT, VOICE_AI_ROOT, SRC_DIR]
-    
+    required_dirs = [PROJECT_ROOT, DATA_ROOT, VOICE_AI_ROOT, SRC_DIR, LIC_ROOT]
+
     for dir_path in required_dirs:
         if not dir_path.exists():
             print(f"⚠️  Warning: {dir_path} does not exist")
-    
+
     # Create output directory if it doesn't exist
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    PDFS_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     return True
 
 
@@ -97,6 +123,7 @@ def get_output_paths():
         "chunks_json": OUTPUT_DIR / CHUNKS_JSON_FILE,
         "chunks_text": OUTPUT_DIR / CHUNKS_TEXT_FILE,
         "metadata_json": OUTPUT_DIR / METADATA_JSON_FILE,
+        "parquet": OUTPUT_DIR / PARQUET_FILE_NAME,
         "output_dir": OUTPUT_DIR
     }
 

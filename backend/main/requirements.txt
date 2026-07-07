@@ -9,3 +9,6 @@ groq>=0.4.0
 # Environment & Config
 python-dotenv>=1.0.0
 scipy>=1.7.0
+# Parquet output
+pandas>=2.0.0
+pyarrow>=14.0.0
