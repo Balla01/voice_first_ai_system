@@ -16,6 +16,7 @@ Env:
 
 import os
 import time
+import asyncio
 import logging
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
@@ -23,6 +24,7 @@ from dotenv import load_dotenv
 
 from audio_router import AudioRouter
 from errors import ClassifiedError, ErrorAction
+from layer3 import SessionTracker, EpochCompactor, get_llm_client, Persistence
 
 load_dotenv()
 
@@ -30,22 +32,69 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("insureassist.layer1")
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-app = FastAPI(title="InsureAssist AI")
+app = FastAPI(title="InsureAssist AI — Layer 1&2: Audio Capture + STT, Layer 3: Session Tracker")
 
-# session_id -> AudioRouter  (created on first connection for a session,
-# torn down when both mic and system sockets for that session close)
+# session_id -> AudioRouter / SessionTracker  (created on first connection for
+# a session, torn down when both mic and system sockets for that session close)
 _sessions: dict[str, AudioRouter] = {}
+_trackers: dict[str, SessionTracker] = {}
 _session_socket_count: dict[str, int] = {}
+
+# Layer 3 shares ONE Postgres pool and ONE Anthropic client across all
+# sessions — SessionTracker instances are per-session (they hold per-session
+# state), but the underlying connections are expensive to set up per-session,
+# so they're created once at app startup and injected into each tracker.
+_persistence: Persistence | None = None
+_compactor: EpochCompactor | None = None
 
 
 def _fmt(epoch_s: float) -> str:
     return datetime.fromtimestamp(epoch_s).strftime("%H:%M:%S.%f")[:-3]
 
 
-def _print_merged_segment(segment):
-    # Placeholder for "final segments -> Transcript Merger -> to context".
-    # In the real app, this hands off to Layer 3 (RAG / policy lookup).
+@app.on_event("startup")
+async def startup():
+    global _persistence, _compactor
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set — see .env.example")
+
+    _persistence = Persistence(dsn=DATABASE_URL)
+    await _persistence.connect()   # also runs schema init (CREATE TABLE IF NOT EXISTS)
+
+    _compactor = EpochCompactor(client=get_llm_client())   # provider chosen via LLM_PROVIDER env var
+    logger.info("Layer 3 ready: Postgres connected, LLM client initialized")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if _persistence:
+        await _persistence.close()
+
+
+def _make_segment_handler(session_id: str):
+    """
+    Bridges the synchronous on_merged_final callback (called directly inside
+    Deepgram's async message handler — see transcript_merger.py) into Layer 3's
+    async SessionTracker.add_turn(), without blocking the STT event loop.
+    """
+
+    def _on_merged_segment(segment):
+        asyncio.create_task(_handle_merged_segment(session_id, segment))
+
+    return _on_merged_segment
+
+
+async def _handle_merged_segment(session_id: str, segment):
+    tracker = _trackers[session_id]
+    spoken_at = segment.spoken_at if segment.spoken_at is not None else time.time()
+
+    turn = await tracker.add_turn(segment.speaker, segment.text, spoken_at)
+    if turn is None:
+        logger.debug(f"Layer 3 dropped duplicate turn: [{segment.speaker}] {segment.text}")
+        return
+
     if segment.spoken_at is not None and segment.transcribed_at is not None:
         logger.info(
             f"[{segment.speaker}] {segment.text}  "
@@ -55,15 +104,25 @@ def _print_merged_segment(segment):
     else:
         logger.info(f"[{segment.speaker}] {segment.text}")
 
+    # Layer 4 (Smart Trigger Gate) doesn't exist yet — this is the hook point
+    # it will plug into: it needs get_formatted_context() to decide whether to
+    # fire, and calls tracker.mark_important(turn) when it does.
+    logger.debug(f"Layer 3 formatted context now:\n{tracker.get_formatted_context()}")
+
 
 async def _get_or_create_router(session_id: str) -> AudioRouter:
     if session_id not in _sessions:
         if not DEEPGRAM_API_KEY:
             raise RuntimeError("DEEPGRAM_API_KEY is not set — see .env.example")
+
+        tracker = SessionTracker(session_id=session_id, persistence=_persistence, compactor=_compactor)
+        await tracker.load_history()   # no-op for a brand new session, rebuilds state on reconnect
+        _trackers[session_id] = tracker
+
         router = AudioRouter(
             session_id=session_id,
             deepgram_api_key=DEEPGRAM_API_KEY,
-            on_merged_final=_print_merged_segment,
+            on_merged_final=_make_segment_handler(session_id),
             session_start_time=time.time(),
         )
         await router.start()
@@ -88,6 +147,12 @@ async def ws_audio(
         logger.error(f"Fatal startup error for session {session_id}: {e}")
         await websocket.close(code=4401)
         return
+    except Exception as e:
+        # Covers Layer 3 failures (e.g. Postgres briefly unreachable) that
+        # aren't already classified above.
+        logger.error(f"Unexpected startup error for session {session_id}: {e}")
+        await websocket.close(code=4500)
+        return
 
     _session_socket_count[session_id] += 1
 
@@ -108,10 +173,11 @@ async def ws_audio(
         if _session_socket_count[session_id] <= 0:
             await router.close()
             _sessions.pop(session_id, None)
+            _trackers.pop(session_id, None)
             _session_socket_count.pop(session_id, None)
             logger.info(f"Session fully closed and cleaned up: {session_id}")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "active_sessions": len(_sessions)}
+    return {"status": "ok", "active_sessions": len(_sessions), "active_trackers": len(_trackers)}
