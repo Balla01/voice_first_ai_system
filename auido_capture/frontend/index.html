@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>InsureAssist AI — Layer 1&2 Demo</title>
+</head>
+<body>
+  <h2>InsureAssist AI — Audio Capture + STT (Layer 1 &amp; 2)</h2>
+  <button id="startBtn">Start Capture</button>
+  <button id="stopBtn" disabled>Stop</button>
+  <p id="status">Idle</p>
+
+  <script type="module">
+    import { startCapture } from './capture-client.js';
+
+    let session = null;
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const status = document.getElementById('status');
+
+    startBtn.onclick = async () => {
+      status.textContent = 'Requesting mic + system audio permissions...';
+      try {
+        session = await startCapture();
+        status.textContent = `Streaming (session ${session.sessionId})`;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+      } catch (err) {
+        status.textContent = `Error: ${err.message}`;
+        console.error(err);
+      }
+    };
+
+    stopBtn.onclick = () => {
+      session?.micPipeline.stop();
+      session?.systemPipeline.stop();
+      status.textContent = 'Stopped';
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+  </script>
+</body>
+</html>
