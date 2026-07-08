@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Agent Assistant for Insurance Sales Teams</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>AI Agent Assistant for Insurance Sales Teams</h1>
+    <div class="controls">
+      <button id="startBtn">▶ Start Capture</button>
+      <button id="stopBtn" disabled>■ Stop</button>
+      <span id="recIndicator" class="rec-indicator hidden">● LIVE</span>
+      <span id="status">Idle</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel transcript-panel">
+      <h2>💬 Live Conversation</h2>
+      <div id="transcript" class="scroll-area"></div>
+    </section>
+
+    <section class="panel suggestions-panel">
+      <h2>💡 Suggested for You</h2>
+      <div id="suggestions" class="scroll-area"></div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { startCapture } from './capture-client.js';
+
+    let session = null;
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const status = document.getElementById('status');
+    const recIndicator = document.getElementById('recIndicator');
+    const transcript = document.getElementById('transcript');
+    const suggestions = document.getElementById('suggestions');
+
+    const SPEAKER_EMOJI = { agent: '🎧', customer: '🙋' };
+    const SPEAKER_LABEL = { agent: 'Agent', customer: 'Customer' };
+
+    function scrollToBottom(el) {
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function renderTranscript(data) {
+      const line = document.createElement('div');
+      line.className = `line ${data.speaker}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'line-meta';
+      meta.textContent = `${SPEAKER_EMOJI[data.speaker] || '❓'} ${SPEAKER_LABEL[data.speaker] || data.speaker}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = data.text;
+
+      line.appendChild(meta);
+      line.appendChild(bubble);
+      transcript.appendChild(line);
+      scrollToBottom(transcript);
+    }
+
+    function renderSuggestion(data) {
+      const item = document.createElement('div');
+      item.className = 'suggestion new';
+
+      const q = document.createElement('p');
+      q.className = 'suggestion-query';
+      const qLabel = document.createElement('strong');
+      qLabel.textContent = 'Customer asked: ';
+      q.append(qLabel, document.createTextNode(data.query));
+
+      const a = document.createElement('p');
+      a.className = 'suggestion-answer';
+      const aLabel = document.createElement('strong');
+      aLabel.textContent = 'You could say: ';
+      a.append(aLabel, document.createTextNode(data.answer));
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.textContent = '📋 Copy';
+      copyBtn.onclick = () => {
+        navigator.clipboard?.writeText(data.answer);
+        copyBtn.textContent = '✅ Copied';
+        setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500);
+      };
+
+      item.append(q, a, copyBtn);
+      suggestions.prepend(item);
+
+      // Drop the "new" highlight class after the entrance animation settles.
+      setTimeout(() => item.classList.remove('new'), 1200);
+    }
+
+    function handleServerMessage(data) {
+      if (data.type === 'transcript') renderTranscript(data);
+      else if (data.type === 'suggestion') renderSuggestion(data);
+    }
+
+    startBtn.onclick = async () => {
+      status.textContent = 'Requesting mic + system audio permissions...';
+      startBtn.disabled = true;
+      try {
+        session = await startCapture(handleServerMessage);
+        status.textContent = `Streaming (session ${session.sessionId})`;
+        recIndicator.classList.remove('hidden');
+        stopBtn.disabled = false;
+      } catch (err) {
+        status.textContent = `Error: ${err.message}`;
+        console.error(err);
+        startBtn.disabled = false;
+      }
+    };
+
+    stopBtn.onclick = () => {
+      session?.micPipeline.stop();
+      session?.systemPipeline.stop();
+      status.textContent = 'Stopped';
+      recIndicator.classList.add('hidden');
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+  </script>
+</body>
+</html>

@@ -13,11 +13,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from constants import (
-    PDFS_DIR, OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP,
+    LIC_ROOT, OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP,
     USE_LLM_ENRICHMENT, USE_SUMMARIES, USE_KEY_INFO,
     get_output_paths, verify_paths
 )
 from data_dump.dump_utils import PDFProcessor, LLMEnricher, DataDumpWriter
+from data_dump.lic_metadata import iter_lic_pdfs
 
 
 def main():
@@ -31,7 +32,7 @@ def main():
     print("📄 PDF DATA DUMPING PIPELINE")
     print("=" * 60)
     print(f"\n⚙️  Configuration:")
-    print(f"   PDFs Dir: {PDFS_DIR}")
+    print(f"   LIC Root: {LIC_ROOT}")
     print(f"   Output Dir: {OUTPUT_DIR}")
     print(f"   Chunk Size: {CHUNK_SIZE} chars")
     print(f"   Chunk Overlap: {CHUNK_OVERLAP} chars")
@@ -59,21 +60,25 @@ def main():
             print("LLM enricher initialized (Groq)")
     
     # ── STEP 2: Find and list PDFs ──
-    print(f"\n[2/5] Scanning for PDFs in {PDFS_DIR}...")
+    print(f"\n[2/5] Scanning for PDFs in {LIC_ROOT}...")
 
-    if not PDFS_DIR.exists():
-        print(f"❌ PDFs directory not found: {PDFS_DIR.absolute()}")
+    if not LIC_ROOT.exists():
+        print(f"❌ LIC root not found: {LIC_ROOT.absolute()}")
         return
 
-    pdf_files = list(Path(PDFS_DIR).glob("*.pdf"))
+    pdf_entries = list(iter_lic_pdfs(LIC_ROOT))
 
-    if not pdf_files:
-        print(f"❌ No PDFs found in {PDFS_DIR}")
+    if not pdf_entries:
+        print(f"❌ No PDFs found under {LIC_ROOT}")
         return
-    
-    print(f"✅ Found {len(pdf_files)} PDF files:")
-    for pdf in pdf_files:
-        print(f"   • {pdf.name}")
+
+    print(f"✅ Found {len(pdf_entries)} PDF files:")
+    for pdf_path, meta in pdf_entries:
+        label = f"{meta['product_type']}"
+        if meta["category"]:
+            label += f" / {meta['category']}"
+        label += f" / {meta['sub_category']} [{meta['doc_type']}]"
+        print(f"   • {pdf_path.name}  ({label})")
     
     # ── STEP 3 + 5: Process each PDF and stream directly to disk ──
     print(f"\n[3/5] Processing PDFs (streaming output to disk)...")
@@ -95,12 +100,12 @@ def main():
         json_f.write('[\n')
         first_chunk = True
 
-        for idx, pdf_path in enumerate(pdf_files, 1):
-            print(f"\n   [{idx}/{len(pdf_files)}] Processing: {pdf_path.name}")
+        for idx, (pdf_path, folder_meta) in enumerate(pdf_entries, 1):
+            print(f"\n   [{idx}/{len(pdf_entries)}] Processing: {pdf_path.name}")
 
             pdf_metadata = None
 
-            for item in processor.stream_pdf_chunks(str(pdf_path)):
+            for item in processor.stream_pdf_chunks(str(pdf_path), extra_meta=folder_meta):
                 # Last item from the generator is always metadata
                 if "_metadata" in item:
                     pdf_metadata = item["_metadata"]
@@ -153,7 +158,7 @@ def main():
     print(f"\n[5/5] Saving metadata...")
     writer.save_metadata({
         "processing_date": all_metadata[0].get("processed_at", "N/A") if all_metadata else "N/A",
-        "total_pdfs": len(pdf_files),
+        "total_pdfs": len(pdf_entries),
         "total_chunks": total_chunks,
         "chunk_size": CHUNK_SIZE,
         "chunk_overlap": CHUNK_OVERLAP,
@@ -166,7 +171,7 @@ def main():
     print("PIPELINE COMPLETE")
     print("=" * 60)
     print(f"Summary:")
-    print(f"   PDFs processed: {len(pdf_files)}")
+    print(f"   PDFs processed: {len(pdf_entries)}")
     print(f"   Total chunks: {total_chunks}")
     print(f"   Chunk size: {CHUNK_SIZE} chars (with {CHUNK_OVERLAP} overlap)")
     print(f"   LLM enriched: {llm_enabled}")

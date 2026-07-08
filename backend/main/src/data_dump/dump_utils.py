@@ -25,11 +25,14 @@ class PDFProcessor:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
     
-    def stream_pdf_chunks(self, pdf_path: str):
+    def stream_pdf_chunks(self, pdf_path: str, extra_meta: Dict = None):
         """
         Generator: yields one chunk dict at a time, processing one page at a time.
         Never loads the full PDF text into memory — buffer is at most one page + chunk_size.
         The final item yielded always contains '_metadata' with processing stats.
+
+        extra_meta (e.g. product_type/category/sub_category/plan_no/uin/doc_type) is
+        merged into every yielded chunk dict.
         """
         import gc
 
@@ -42,7 +45,7 @@ class PDFProcessor:
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 total_pages = len(pdf.pages)
-                source_info = {"source_file": filename, "total_pages": total_pages}
+                source_info = {"source_file": filename, "total_pages": total_pages, **(extra_meta or {})}
 
                 for page_idx, page in enumerate(pdf.pages):
                     page_text = page.extract_text() or ""
@@ -69,9 +72,13 @@ class PDFProcessor:
                             break
 
                         end = self.chunk_size
+                        # Only trust the word boundary if it still leaves room to
+                        # advance past `overlap` — dense/tabular text with no early
+                        # spaces could otherwise pin end <= overlap forever, making
+                        # buffer[max(0, end-overlap):] a no-op and looping infinitely.
                         if buffer[end] not in (' ', '\n'):
                             space_pos = buffer.rfind(' ', 0, end)
-                            if space_pos > 0:
+                            if space_pos > overlap:
                                 end = space_pos
 
                         chunk_text = buffer[:end].strip()

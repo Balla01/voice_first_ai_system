@@ -10,16 +10,16 @@ import sys
 from pathlib import Path
 
 # Import constants to verify paths
-from constants import PDFS_DIR, OUTPUT_DIR, verify_paths
+from constants import LIC_ROOT, OUTPUT_DIR, verify_paths
 
 def main():
     """Run the data dump pipeline"""
-    
+
     # Verify paths exist
     print("📋 Verifying configuration...")
     verify_paths()
     print(f"✅ Config verified")
-    print(f"   PDFs: {PDFS_DIR}")
+    print(f"   LIC Root: {LIC_ROOT}")
     print(f"   Output: {OUTPUT_DIR}")
     
     # Get data_dump script path

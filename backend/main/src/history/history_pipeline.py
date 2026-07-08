@@ -15,6 +15,7 @@ Each point is tagged with session_id + customer_id for filtered retrieval.
 import gc
 import os
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple
@@ -50,14 +51,22 @@ load_dotenv()
 # ── Embedding model (loaded once, shared across the session) ──────────────────
 
 _model: SentenceTransformer = None
+# Guards _get_model()'s check-then-construct against a genuine race: callers
+# via asyncio.to_thread() run on real OS threads (a plain "if _model is None"
+# check is not atomic), so two near-simultaneous first calls could otherwise
+# both pass the check and construct the model concurrently.
+_model_lock = threading.Lock()
 
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        print(f"Loading embedding model: {EMBEDDING_MODEL}")
-        _model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
-        _model[0].auto_model.config.unpad_inputs = False
-        print("Model ready.")
+        with _model_lock:
+            if _model is None:  # re-check: another thread may have won the race
+                print(f"Loading embedding model: {EMBEDDING_MODEL}")
+                model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
+                model[0].auto_model.config.unpad_inputs = False
+                _model = model
+                print("Model ready.")
     return _model
 
 def _embed(texts: List[str]) -> List[List[float]]:

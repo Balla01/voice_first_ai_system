@@ -34,3 +34,17 @@ python app.py --backend whisper --model base
 
 =============================================
 python app_vosk.py --model models\vosk-model-small-en-us-0.15
+
+
+Latest Commands
+===============
+
+Backend (FastAPI, port 8000):
+cd "C:\projects\audio_transition_projects\voice_first_ai_system\backend\main\auido_capture"
+python -m uvicorn main:app --reload --port 8000
+
+
+Frontend (static file server, port 5500):
+cd "C:\projects\audio_transition_projects\voice_first_ai_system\frontend"
+python -m http.server 5500
+Then open http://localhost:5500 in Chrome.
