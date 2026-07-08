@@ -7,101 +7,106 @@ The browser opens TWO connections per session (one for mic, one for system
 audio), both tagged with the same session_id. This file routes each
 connection's bytes into the right AudioRouter/channel.
 
-Layer 3 wiring: each session's merged transcript segments feed a
-TurnAccumulator, which buffers customer speech into full turns (flushed on
-silence or agent speaker-switch) and hands each turn to a LiveRagWorker
-(rag_bridge.py -> main/src/main.py's RAG pipeline, unmodified). The
-generated answer is pushed back to the browser over the session's own
-"mic" WebSocket as JSON: {"type": "suggestion", "query": ..., "answer": ...}.
-
 Run:
-    uvicorn main:app --port 8000
-    (avoid --reload if you rely on "model loads before the API is reachable":
-    --reload runs a separate parent "reloader" supervisor process that prints
-    "Uvicorn running on http://..." immediately, before the actual child
-    server process even starts — that line is NOT a readiness signal in
-    --reload mode. The real signal, in both modes, is the
-    "===> API READY <===" line below, printed only after the child process's
-    lifespan/warmup has fully completed.)
+    uvicorn main:app --reload --port 8000
 
 Env:
     DEEPGRAM_API_KEY=your_key_here   (put in a .env file, see .env.example)
 """
 
-import asyncio
 import os
 import time
+import asyncio
 import logging
-from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from dotenv import load_dotenv
 
 from audio_router import AudioRouter
 from errors import ClassifiedError, ErrorAction
-from turn_accumulator import TurnAccumulator
-from rag_bridge import LiveRagWorker, rag_main
+from layer3 import SessionTracker, EpochCompactor, get_llm_client, Persistence
+from layer4 import TriggerGate, Tier2EmbeddingClassifier
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+from logging_config import setup_logging
+setup_logging()
 logger = logging.getLogger("insureassist.layer1")
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
+app = FastAPI(title="InsureAssist AI — Layer 1&2: Audio Capture + STT, Layer 3: Session Tracker")
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    """
-    Load the embedding model now, before the ASGI app finishes startup and
-    uvicorn's *worker* process begins accepting connections — otherwise it
-    lazy-loads on the FIRST real customer turn of the FIRST session, adding
-    ~7-25s to that turn's latency.
-
-    NOTE on --reload: uvicorn's reload supervisor prints "Uvicorn running on
-    http://..." from its own PARENT process immediately on launch, before
-    this function (which only runs in the CHILD worker process) is even
-    called. That line is not a readiness signal when --reload is used — the
-    "===> API READY <===" line below is, in both --reload and plain mode.
-    """
-    logger.info("Warming up embedding model — API is NOT ready yet...")
-    t0 = time.time()
-    await asyncio.to_thread(rag_main._embed, ["warmup"])
-    logger.info(f"Embedding model ready ({time.time() - t0:.1f}s).")
-    logger.info("===> API READY <=== now accepting connections.")
-    yield
-
-
-app = FastAPI(title="InsureAssist AI", lifespan=lifespan)
-
-# session_id -> AudioRouter  (created on first connection for a session,
-# torn down when both mic and system sockets for that session close)
+# session_id -> AudioRouter / SessionTracker / TriggerGate  (created on first
+# connection for a session, torn down when both mic and system sockets for
+# that session close)
 _sessions: dict[str, AudioRouter] = {}
+_trackers: dict[str, SessionTracker] = {}
+_gates: dict[str, TriggerGate] = {}
 _session_socket_count: dict[str, int] = {}
-_rag_workers: dict[str, LiveRagWorker] = {}
-# session_id -> {stream_id: WebSocket} — lets us push suggestions back over
-# a specific stream (mic) without double-delivering to both mic+system sockets,
-# which belong to the same browser page.
-_session_sockets: dict[str, dict[str, WebSocket]] = {}
 
-# Holds references to fire-and-forget tasks (transcript pushes, etc.) so they
-# aren't garbage-collected mid-flight — asyncio only holds a weak reference
-# to a task once nothing else does, per the create_task() docs' own warning.
-_background_tasks: set[asyncio.Task] = set()
+# Layer 3 shares ONE Postgres pool and ONE Anthropic client across all
+# sessions — SessionTracker instances are per-session (they hold per-session
+# state), but the underlying connections are expensive to set up per-session,
+# so they're created once at app startup and injected into each tracker.
+_persistence: Persistence | None = None
+_compactor: EpochCompactor | None = None
 
-
-def _fire_and_forget(coro):
-    task = asyncio.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-    return task
+# Layer 4's Tier 2 embedding classifier loads the MiniLM model once and holds
+# no session-specific state itself — shared across all TriggerGate instances
+# so we're not reloading the model per session.
+_tier2_classifier: Tier2EmbeddingClassifier | None = None
 
 
 def _fmt(epoch_s: float) -> str:
     return datetime.fromtimestamp(epoch_s).strftime("%H:%M:%S.%f")[:-3]
 
 
-def _log_segment(segment):
+@app.on_event("startup")
+async def startup():
+    global _persistence, _compactor, _tier2_classifier
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set — see .env.example")
+
+    _persistence = Persistence(dsn=DATABASE_URL)
+    await _persistence.connect()   # also runs schema init (CREATE TABLE IF NOT EXISTS)
+
+    _compactor = EpochCompactor(client=get_llm_client())   # provider chosen via LLM_PROVIDER env var
+
+    _tier2_classifier = Tier2EmbeddingClassifier()   # logs a warning + degrades gracefully if MiniLM can't load
+    logger.info("Layer 3 & 4 ready: Postgres connected, LLM client initialized, trigger gate ready")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if _persistence:
+        await _persistence.close()
+
+
+def _make_segment_handler(session_id: str):
+    """
+    Bridges the synchronous on_merged_final callback (called directly inside
+    Deepgram's async message handler — see transcript_merger.py) into Layer 3's
+    async SessionTracker.add_turn(), without blocking the STT event loop.
+    """
+
+    def _on_merged_segment(segment):
+        asyncio.create_task(_handle_merged_segment(session_id, segment))
+
+    return _on_merged_segment
+
+
+async def _handle_merged_segment(session_id: str, segment):
+    tracker = _trackers[session_id]
+    gate = _gates[session_id]
+    spoken_at = segment.spoken_at if segment.spoken_at is not None else time.time()
+
+    turn = await tracker.add_turn(segment.speaker, segment.text, spoken_at)
+    if turn is None:
+        logger.debug(f"Layer 3 dropped duplicate turn: [{segment.speaker}] {segment.text}")
+        return
+
     if segment.spoken_at is not None and segment.transcribed_at is not None:
         logger.info(
             f"[{segment.speaker}] {segment.text}  "
@@ -111,19 +116,21 @@ def _log_segment(segment):
     else:
         logger.info(f"[{segment.speaker}] {segment.text}")
 
+    logger.debug(f"Layer 3 formatted context now:\n{tracker.get_formatted_context()}")
 
-async def _send_to_session(session_id: str, payload: dict):
-    """Push a JSON message back to the browser over the session's mic socket
-    (falling back to whatever's open if mic isn't connected)."""
-    sockets = _session_sockets.get(session_id, {})
-    ws = sockets.get("mic") or next(iter(sockets.values()), None)
-    if ws is None:
-        logger.warning(f"No open socket to deliver suggestion for session {session_id}")
-        return
-    try:
-        await ws.send_json(payload)
-    except Exception as e:
-        logger.warning(f"Failed to send suggestion to session {session_id}: {e}")
+    # Layer 4: decide whether this turn is worth triggering Layer 5 on.
+    # Layer 5 (RAG + Prompt Builder) doesn't exist yet, so for now we just
+    # log the decision — this is the hook point it plugs into next.
+    result = gate.check(speaker=segment.speaker, text=segment.text, is_final=True, now=time.time())
+
+    if result.action.value == "fire":
+        await tracker.mark_important(turn)   # feeds back into Layer 3's IMPORTANT tagging
+        intents = [m.intent for m in result.matches]
+        logger.info(f"  -> Layer 4 FIRE: {intents} (would call Layer 5 here)")
+    elif result.action.value == "refine":
+        logger.info("  -> Layer 4 REFINE: agent asked to edit the last answer (would call Layer 5 here)")
+    else:
+        logger.debug(f"Layer 4: no trigger ({result.reason})")
 
 
 async def _get_or_create_router(session_id: str) -> AudioRouter:
@@ -131,37 +138,16 @@ async def _get_or_create_router(session_id: str) -> AudioRouter:
         if not DEEPGRAM_API_KEY:
             raise RuntimeError("DEEPGRAM_API_KEY is not set — see .env.example")
 
-        async def on_answer(query: str, answer: str):
-            await _send_to_session(session_id, {
-                "type": "suggestion",
-                "query": query,
-                "answer": answer,
-            })
+        tracker = SessionTracker(session_id=session_id, persistence=_persistence, compactor=_compactor)
+        await tracker.load_history()   # no-op for a brand new session, rebuilds state on reconnect
+        _trackers[session_id] = tracker
 
-        # No separate CRM/customer identity is wired through yet, so the
-        # browser-generated session_id doubles as both session_id and
-        # customer_id for RuntimeHistory's scoping.
-        rag_worker = LiveRagWorker(session_id=session_id, customer_id=session_id, on_answer=on_answer)
-        _rag_workers[session_id] = rag_worker
-
-        accumulator = TurnAccumulator(
-            on_customer_turn=rag_worker.handle_customer_turn,
-            on_agent_segment=rag_worker.handle_agent_segment,
-        )
-
-        def on_merged_final(segment):
-            _log_segment(segment)  # keep existing console visibility
-            _fire_and_forget(_send_to_session(session_id, {
-                "type": "transcript",
-                "speaker": segment.speaker,  # "agent" | "customer"
-                "text": segment.text,
-            }))
-            accumulator.add_segment(segment)
+        _gates[session_id] = TriggerGate(session_id=session_id, tier2_classifier=_tier2_classifier)
 
         router = AudioRouter(
             session_id=session_id,
             deepgram_api_key=DEEPGRAM_API_KEY,
-            on_merged_final=on_merged_final,
+            on_merged_final=_make_segment_handler(session_id),
             session_start_time=time.time(),
         )
         await router.start()
@@ -186,9 +172,14 @@ async def ws_audio(
         logger.error(f"Fatal startup error for session {session_id}: {e}")
         await websocket.close(code=4401)
         return
+    except Exception as e:
+        # Covers Layer 3 failures (e.g. Postgres briefly unreachable) that
+        # aren't already classified above.
+        logger.error(f"Unexpected startup error for session {session_id}: {e}")
+        await websocket.close(code=4500)
+        return
 
     _session_socket_count[session_id] += 1
-    _session_sockets.setdefault(session_id, {})[stream_id] = websocket
 
     try:
         while True:
@@ -204,20 +195,15 @@ async def ws_audio(
         await websocket.close(code=4500)
     finally:
         _session_socket_count[session_id] -= 1
-        sockets = _session_sockets.get(session_id)
-        if sockets and sockets.get(stream_id) is websocket:
-            del sockets[stream_id]
         if _session_socket_count[session_id] <= 0:
             await router.close()
             _sessions.pop(session_id, None)
+            _trackers.pop(session_id, None)
+            _gates.pop(session_id, None)
             _session_socket_count.pop(session_id, None)
-            _session_sockets.pop(session_id, None)
-            worker = _rag_workers.pop(session_id, None)
-            if worker:
-                await asyncio.to_thread(worker.close)
             logger.info(f"Session fully closed and cleaned up: {session_id}")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "active_sessions": len(_sessions)}
+    return {"status": "ok", "active_sessions": len(_sessions), "active_trackers": len(_trackers)}
