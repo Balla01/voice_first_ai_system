@@ -224,8 +224,16 @@ class RuntimeHistory:
     # ── Eviction ─────────────────────────────────────────────────────────────
 
     def _check_evict(self):
-        """Evict oldest chunks if history exceeds MAX_HISTORY_CHUNKS."""
-        count = self.history_client.count(HISTORY_COLLECTION).count
+        """Evict oldest chunks if THIS session's history exceeds MAX_HISTORY_CHUNKS.
+
+        Must be scoped to this session (not a collection-wide count): runtime_history
+        is one shared on-disk collection across every session_id/customer_id ever run
+        (CLEAR_RUNTIME_HISTORY=False persists it), so a global count would trigger
+        eviction of this session's turns because unrelated sessions filled the cap.
+        """
+        count = self.history_client.count(
+            HISTORY_COLLECTION, count_filter=self._session_filter()
+        ).count
         if count > MAX_HISTORY_CHUNKS:
             print(f"  [history] RAM cap reached ({count}/{MAX_HISTORY_CHUNKS}) — evicting {EVICT_COUNT} oldest chunks")
             self._evict(EVICT_COUNT)
