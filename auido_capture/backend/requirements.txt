@@ -11,4 +11,4 @@ openai==1.54.0
 google-genai==0.3.0
 ollama==0.4.4
 pytest==8.3.3
-
+sentence-transformers==3.3.1
