@@ -12,6 +12,8 @@ from constants import EMBED_DIR, CLEAR_RUNTIME_HISTORY
 from qdrant_client import QdrantClient
 
 
+
+
 def inspect(label: str, db_path: Path):
     if not db_path.exists():
         print(f"\n[{label}] path not found: {db_path}")
