@@ -38,9 +38,7 @@ DATA_DUMP_DIR = SRC_DIR / "data_dump"
 MODELS_DIR = VOICE_AI_ROOT / "models"
 LOGS_DIR = VOICE_AI_ROOT / "logs"
 
-# Deliberately NOT under VOICE_AI_ROOT/"main" — lives at the voice_first_ai_system
-# top level instead, independent of wherever the "main" code folder itself sits.
-EMBED_DIR = PROJECT_ROOT / "voice_first_ai_system" / "embed_files"
+EMBED_DIR = VOICE_AI_ROOT / "embed_files"
 
 # ── TEXT PROCESSING CONFIG ──
 CHUNK_SIZE = 1000  # Increased from 500 to reduce memory usage

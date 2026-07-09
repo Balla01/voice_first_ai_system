@@ -48,3 +48,8 @@ Frontend (static file server, port 5500):
 cd "C:\projects\audio_transition_projects\voice_first_ai_system\frontend"
 python -m http.server 5500
 Then open http://localhost:5500 in Chrome.
+
+RAG:
+===
+cd rag_pipeline/src
+uvicorn api:app --reload --port 8001

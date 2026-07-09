@@ -35,11 +35,10 @@ function concatInt16Buffers(buffers) {
 }
 
 class AudioStreamPipeline {
-  constructor(stream, streamId, sessionId, onServerMessage) {
+  constructor(stream, streamId, sessionId) {
     this.stream = stream;
     this.streamId = streamId; // "mic" | "system"
     this.sessionId = sessionId;
-    this.onServerMessage = onServerMessage; // (data) => void, parsed JSON from the backend
     this.audioContext = null;
     this.workletNode = null;
     this.socket = null;
@@ -61,20 +60,6 @@ class AudioStreamPipeline {
     this.socket.onopen = () => console.log(`[${this.streamId}] WS connected`);
     this.socket.onerror = (err) => console.error(`[${this.streamId}] WS error`, err);
     this.socket.onclose = (evt) => console.log(`[${this.streamId}] WS closed`, evt.code, evt.reason);
-
-    // The backend pushes RAG suggestions back as JSON text frames (currently
-    // only over the "mic" stream's socket — see auido_capture/main.py's
-    // _send_to_session). Audio frames we SEND are binary/ArrayBuffer; this
-    // handles the separate JSON messages the server sends back to us.
-    this.socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') return; // ignore any non-JSON/binary frames
-      if (!this.onServerMessage) return;
-      try {
-        this.onServerMessage(JSON.parse(event.data));
-      } catch (err) {
-        console.error(`[${this.streamId}] Failed to parse server message`, err, event.data);
-      }
-    };
 
     this.workletNode.port.onmessage = (event) => {
       this._pendingChunks.push(event.data); // just buffer, don't send yet
@@ -105,13 +90,7 @@ class AudioStreamPipeline {
   }
 }
 
-/**
- * @param {(data: object) => void} [onServerMessage] - called with each JSON
- *   message the backend pushes back over the mic socket:
- *     {"type": "transcript", "speaker": "agent"|"customer", "text": string}
- *     {"type": "suggestion", "query": string, "answer": string}
- */
-export async function startCapture(onServerMessage) {
+export async function startCapture() {
   const sessionId = makeSessionId();
 
   // Microphone -> agent side
@@ -127,21 +106,8 @@ export async function startCapture(onServerMessage) {
     audio: true,
   });
 
-  // getDisplayMedia's audio:true is only a REQUEST -- the browser silently
-  // returns zero audio tracks if the user picked "Entire Screen"/a window
-  // instead of a Chrome Tab, or didn't check "Share tab audio" in the picker.
-  // Fail here with a clear, actionable message instead of the cryptic
-  // "MediaStream has no audio track" error createMediaStreamSource throws.
-  if (systemStream.getAudioTracks().length === 0) {
-    systemStream.getTracks().forEach((t) => t.stop());
-    throw new Error(
-      'No system audio track was shared. In the share picker, choose the ' +
-      '"Chrome Tab" option (not Entire Screen/Window) and check "Share tab audio", then try again.'
-    );
-  }
-
-  const micPipeline = new AudioStreamPipeline(micStream, 'mic', sessionId, onServerMessage);
-  const systemPipeline = new AudioStreamPipeline(systemStream, 'system', sessionId, onServerMessage);
+  const micPipeline = new AudioStreamPipeline(micStream, 'mic', sessionId);
+  const systemPipeline = new AudioStreamPipeline(systemStream, 'system', sessionId);
 
   await micPipeline.start();
   await systemPipeline.start();

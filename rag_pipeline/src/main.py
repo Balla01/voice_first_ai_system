@@ -143,10 +143,17 @@ def build_context(
 
 # ── LLM call ─────────────────────────────────────────────────────────────────
 
-def call_llm(query: str, context: str) -> str:
+def stream_llm_chunks(query: str, context: str):
+    """
+    Generator over raw content deltas from the Groq streaming call — the
+    single place that owns the actual API call. call_llm() (below) and the
+    FastAPI streaming endpoint (api.py) both consume this instead of each
+    duplicating the Groq request.
+    """
     api_key = os.getenv("groq_api")
     if not api_key:
-        return "[LLM unavailable — groq_api not set in .env]"
+        yield "[LLM unavailable — groq_api not set in .env]"
+        return
 
     user_content = query
     if context.strip():
@@ -171,12 +178,17 @@ def call_llm(query: str, context: str) -> str:
         stream=True,
     )
 
-    parts = []
     for chunk in completion:
         content = chunk.choices[0].delta.content
         if content:
-            print(content, end="", flush=True)
-            parts.append(content)
+            yield content
+
+
+def call_llm(query: str, context: str) -> str:
+    parts = []
+    for content in stream_llm_chunks(query, context):
+        print(content, end="", flush=True)
+        parts.append(content)
     print()
     return "".join(parts)
 
