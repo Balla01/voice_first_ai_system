@@ -84,6 +84,11 @@ body {
 .call-id { font-size: 0.85rem; color: var(--text-muted); }
 .call-id b { color: var(--text); font-weight: 600; }
 .call-timer { font-size: 0.95rem; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); }
+.agent-badge {
+  font-size: 0.8rem; font-weight: 600; color: var(--accent-strong);
+  background: var(--accent-soft); padding: 4px 10px; border-radius: 999px;
+}
+.agent-badge:empty { display: none; }
 
 .icon-btn {
   width: 36px; height: 36px;
@@ -242,20 +247,6 @@ body {
 :root[data-theme="dark"] .turn.customer .turn-bubble { background: #17392f; }
 
 /* ---------- Copilot ---------- */
-.intent-bar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin: 4px 18px 0; padding: 12px 14px;
-  border: 1px solid var(--border); border-radius: 12px;
-  background: var(--panel-solid);
-}
-.intent-label { color: var(--text-faint); font-size: 0.88rem; }
-.intent-change { color: var(--text-muted); font-size: 0.85rem; }
-.intent-select {
-  padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border);
-  background: var(--panel-solid); color: var(--text); font-size: 0.85rem; cursor: pointer;
-}
-.intent-bar .btn-primary { margin-left: auto; }
-
 .btn-primary {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 15px; border: none; border-radius: 9px;
@@ -291,9 +282,30 @@ body {
   font-size: 0.7rem; color: var(--text-muted); background: var(--border-soft);
   border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; white-space: nowrap;
 }
-.sug-answer { margin: 0 0 4px; font-size: 0.88rem; line-height: 1.5; color: var(--text); white-space: pre-wrap; }
+.sug-answer { margin: 0 0 4px; font-size: 0.88rem; line-height: 1.5; color: var(--text); }
 .sug-answer.pending { color: var(--text-faint); font-style: italic; }
 .sug-answer.err { color: #e5484d; }
+.sug-answer p { margin: 0 0 8px; }
+.sug-answer p:last-child { margin-bottom: 0; }
+.sug-answer ul, .sug-answer ol { margin: 4px 0 8px; padding-left: 20px; }
+.sug-answer ul:last-child, .sug-answer ol:last-child { margin-bottom: 0; }
+.sug-answer li { margin: 2px 0; }
+.sug-answer h1, .sug-answer h2, .sug-answer h3,
+.sug-answer h4, .sug-answer h5, .sug-answer h6 {
+  margin: 10px 0 6px; font-weight: 700; line-height: 1.3; color: var(--text);
+}
+.sug-answer h1:first-child, .sug-answer h2:first-child, .sug-answer h3:first-child,
+.sug-answer h4:first-child, .sug-answer h5:first-child, .sug-answer h6:first-child { margin-top: 0; }
+.sug-answer h1 { font-size: 1.05rem; }
+.sug-answer h2 { font-size: 1rem; }
+.sug-answer h3, .sug-answer h4, .sug-answer h5, .sug-answer h6 { font-size: 0.92rem; }
+.sug-answer strong { font-weight: 700; }
+.sug-answer em { font-style: italic; }
+.sug-answer code {
+  background: var(--accent-soft); color: var(--accent-strong);
+  padding: 1px 5px; border-radius: 5px; font-size: 0.85em;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
 .clarify-btn {
   display: inline-block; margin: 6px 6px 0 0; padding: 6px 12px;
   border-radius: 999px; border: 1px solid var(--accent-strong);
@@ -302,6 +314,14 @@ body {
   transition: transform .12s, background .12s, color .12s;
 }
 .clarify-btn:hover { background: var(--accent-strong); color: #fff; transform: translateY(-1px); }
+.email-confirm {
+  margin-top: 8px; padding: 8px 10px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--border-soft);
+  font-size: 0.82rem; color: var(--text);
+}
+.email-sent-note {
+  margin-top: 6px; font-size: 0.78rem; font-weight: 600; color: var(--customer);
+}
 .copy-btn {
   padding: 4px 11px; font-size: 0.76rem; border: 1px solid var(--border);
   border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer;
@@ -324,7 +344,7 @@ body {
 
 /* ---------- Right tabs ---------- */
 .tabs {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
   padding: 12px 12px 0;
 }
 .tab {
@@ -346,9 +366,10 @@ body {
 .askai-head-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .askai-head-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .askai-thread-badge {
-  font-size: 0.72rem; font-weight: 600; font-family: monospace;
-  color: var(--accent-strong); background: var(--accent-soft);
-  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  /* Shows the raw session id (e.g. "b5ae645e") — kept fully functional in JS
+     (updateThreadBadge() still runs) but hidden from the UI; users shouldn't
+     see internal session identifiers. */
+  display: none;
 }
 .askai-thread-select {
   max-width: 170px; padding: 7px 28px 7px 10px; border-radius: 9px; border: 1px solid var(--border);
@@ -383,17 +404,65 @@ body {
 }
 .chip:hover { border-color: var(--accent); transform: translateY(-1px); }
 
+.call-context-toggle {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 16px 0; font-size: 0.8rem; font-weight: 500; color: var(--text-muted);
+  cursor: pointer; user-select: none;
+}
+.call-context-toggle input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.call-context-toggle:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+
 .askai-input-row {
-  display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-soft);
+  display: flex; align-items: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-soft);
 }
 .askai-input {
   flex: 1; padding: 10px 13px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--panel-solid); color: var(--text); font-size: 0.88rem; outline: none;
+  font-family: inherit; line-height: 1.4; resize: none;
+  max-height: 120px; overflow-y: auto;
 }
 .askai-input:focus { border-color: var(--accent); }
+.gmail-btn:hover { border-color: #EA4335; }
+.danger-btn:hover { color: #e5484d; border-color: #e5484d; }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
 /* scrollbars */
 .panel-body::-webkit-scrollbar, .askai-scroll::-webkit-scrollbar { width: 8px; }
 .panel-body::-webkit-scrollbar-thumb, .askai-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+
+/* ---------- Login overlay ---------- */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(1100px 500px at 12% -8%, var(--bg-3), transparent 60%),
+    radial-gradient(1100px 600px at 100% 0%, var(--bg-2), transparent 55%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-2));
+}
+.login-overlay[hidden] { display: none; }
+.login-card {
+  width: 100%; max-width: 360px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 28px 26px;
+}
+.login-brand { display: flex; align-items: center; gap: 12px; justify-content: center; margin-bottom: 22px; }
+.login-form { display: flex; flex-direction: column; gap: 6px; }
+.login-label { font-size: 0.82rem; font-weight: 600; color: var(--text-muted); margin-top: 10px; }
+.login-input {
+  padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--panel-solid); color: var(--text); font-size: 0.92rem; outline: none;
+}
+.login-input:focus { border-color: var(--accent); }
+.login-submit { margin-top: 18px; justify-content: center; width: 100%; }
+.login-error { margin: 10px 0 0; font-size: 0.82rem; color: #e5484d; text-align: center; }
+.login-mode-toggle {
+  margin-top: 14px; padding: 0; border: none; background: none;
+  color: var(--accent-strong); font-size: 0.82rem; font-weight: 600;
+  cursor: pointer; text-align: center; width: 100%;
+}
+.login-mode-toggle:hover { text-decoration: underline; }

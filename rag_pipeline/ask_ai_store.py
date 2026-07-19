@@ -3,11 +3,13 @@ ask_ai_store.py — chat_bot_ask_ai: the advanced_filter=True Q&A log.
 
 Deliberately independent of RuntimeHistory (the call-transcript pipeline in
 history/history_pipeline.py): one process-wide Qdrant client, threads keyed
-by (customer_id, ask_ai_session_id) — NOT by any live-call session_id. That
-lets a customer hold multiple "Ask AI" conversations at once (ChatGPT-style)
-and switch between them freely, independent of whatever call/session happens
-to be active. One instance is created at api.py startup and reused for the
-life of the process (see api.py).
+by (agent_id, ask_ai_session_id) — NOT by any live-call session_id. agent_id
+is the logged-in sales agent (auido_capture's /auth/login), not a customer —
+Ask-AI threads belong to the agent and persist across every call/session they
+ever use, independent of whatever call happens to be active. That also lets
+an agent hold multiple "Ask AI" conversations at once (ChatGPT-style) and
+switch between them freely. One instance is created at api.py startup and
+reused for the life of the process (see api.py).
 """
 
 import threading
@@ -45,13 +47,13 @@ class AskAIStore:
         self._id_counter = self._client.count(CHAT_ASK_AI_COLLECTION).count
         self._id_lock = threading.Lock()
 
-    def _thread_filter(self, customer_id: str, ask_ai_session_id: str) -> Filter:
+    def _thread_filter(self, agent_id: str, ask_ai_session_id: str) -> Filter:
         return Filter(must=[
-            FieldCondition(key="customer_id", match=MatchValue(value=customer_id)),
+            FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
             FieldCondition(key="ask_ai_session_id", match=MatchValue(value=ask_ai_session_id)),
         ])
 
-    def save(self, customer_id: str, ask_ai_session_id: str, query: str, answer: str) -> None:
+    def save(self, agent_id: str, ask_ai_session_id: str, query: str, answer: str) -> None:
         """Save one {query, answer} pair, embedded as combined Q+A text so
         semantic search over this collection can match on either side."""
         combined = f"Q: {query}\nA: {answer}"
@@ -66,7 +68,7 @@ class AskAIStore:
                 id=point_id,
                 vector=vector,
                 payload={
-                    "customer_id":       customer_id,
+                    "agent_id":       agent_id,
                     "ask_ai_session_id": ask_ai_session_id,
                     "query":             query,
                     "answer":            answer,
@@ -77,11 +79,11 @@ class AskAIStore:
             wait=True,
         )
 
-    def get_recent(self, customer_id: str, ask_ai_session_id: str, n: int = 5) -> List[str]:
+    def get_recent(self, agent_id: str, ask_ai_session_id: str, n: int = 5) -> List[str]:
         """Most recent n {query, answer} pairs in this thread, chronological."""
         results, _ = self._client.scroll(
             collection_name=CHAT_ASK_AI_COLLECTION,
-            scroll_filter=self._thread_filter(customer_id, ask_ai_session_id),
+            scroll_filter=self._thread_filter(agent_id, ask_ai_session_id),
             limit=n,
             order_by=OrderBy(key="turn", direction=Direction.DESC),
             with_vectors=False,
@@ -92,12 +94,12 @@ class AskAIStore:
             for p in reversed(results)
         ]
 
-    def search_relevant(self, customer_id: str, ask_ai_session_id: str, query_vec: List[float], k: int = 5) -> List[tuple]:
+    def search_relevant(self, agent_id: str, ask_ai_session_id: str, query_vec: List[float], k: int = 5) -> List[tuple]:
         """Semantically relevant past {query, answer} pairs in this thread."""
         response = self._client.query_points(
             collection_name=CHAT_ASK_AI_COLLECTION,
             query=query_vec,
-            query_filter=self._thread_filter(customer_id, ask_ai_session_id),
+            query_filter=self._thread_filter(agent_id, ask_ai_session_id),
             limit=k,
             with_payload=True,
         )
@@ -106,14 +108,14 @@ class AskAIStore:
             for r in response.points
         ]
 
-    def get_thread(self, customer_id: str, ask_ai_session_id: str, limit: int = 200) -> List[dict]:
+    def get_thread(self, agent_id: str, ask_ai_session_id: str, limit: int = 200) -> List[dict]:
         """Every {query, answer, timestamp} pair in this thread, chronological —
         structured (unlike get_recent's combined "Q:.../A:..." strings, which
         are meant for LLM context, not UI rendering). Powers "reopen a past
         Ask-AI thread and see the full conversation" in the frontend."""
         results, _ = self._client.scroll(
             collection_name=CHAT_ASK_AI_COLLECTION,
-            scroll_filter=self._thread_filter(customer_id, ask_ai_session_id),
+            scroll_filter=self._thread_filter(agent_id, ask_ai_session_id),
             limit=limit,
             order_by=OrderBy(key="turn", direction=Direction.ASC),
             with_vectors=False,
@@ -124,13 +126,13 @@ class AskAIStore:
             for p in results
         ]
 
-    def list_sessions(self, customer_id: str) -> List[dict]:
-        """Distinct ask_ai_session_id threads for this customer, most-recent-first —
+    def list_sessions(self, agent_id: str) -> List[dict]:
+        """Distinct ask_ai_session_id threads for this agent, most-recent-first —
         powers a ChatGPT-style session switcher. Demo-scale: scrolls this
-        customer's whole chat_bot_ask_ai history and groups in Python."""
+        agent's whole chat_bot_ask_ai history and groups in Python."""
         points, _ = self._client.scroll(
             collection_name=CHAT_ASK_AI_COLLECTION,
-            scroll_filter=Filter(must=[FieldCondition(key="customer_id", match=MatchValue(value=customer_id))]),
+            scroll_filter=Filter(must=[FieldCondition(key="agent_id", match=MatchValue(value=agent_id))]),
             limit=10_000,
             order_by=OrderBy(key="turn", direction=Direction.ASC),
             with_vectors=False,
@@ -146,6 +148,15 @@ class AskAIStore:
             entry["last_query"] = p.payload["query"]
             entry["last_timestamp"] = p.payload["timestamp"]
         return sorted(sessions.values(), key=lambda s: s["last_timestamp"], reverse=True)
+
+    def delete_thread(self, agent_id: str, ask_ai_session_id: str) -> None:
+        """Permanently deletes every point in this thread. Scoped by BOTH
+        agent_id and ask_ai_session_id (via _thread_filter) so an agent can
+        only ever delete their own threads."""
+        self._client.delete(
+            collection_name=CHAT_ASK_AI_COLLECTION,
+            points_selector=self._thread_filter(agent_id, ask_ai_session_id),
+        )
 
     def close(self) -> None:
         self._client.close()

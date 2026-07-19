@@ -11,8 +11,11 @@ lock so cooldown check-and-record is atomic (no concurrent double-fires):
       -> validate each tool call's args against its JSON schema
       -> ONE retry re-prompting with the validation error on failure
       -> drop still-invalid calls (never send hallucinated args downstream)
-    timeout / error -> fall back to the deterministic TriggerGate (reliability
-      net: same fallback the LAYER4_TRIGGER_MODE flag flips to wholesale)
+    primary LLM error -> fallback_llm (a second, independent provider — e.g.
+      Gemini when the primary is Ollama) tried once, same tool-calling flow
+    fallback_llm also unavailable/errors -> deterministic TriggerGate (last-
+      resort reliability net: same gate the LAYER4_TRIGGER_MODE flag flips to
+      wholesale)
 
 refine_last_answer is deliberately NOT a router tool — refinement ("make it
 shorter" etc.) is an explicit UI-button action that calls Layer 5 directly,
@@ -68,7 +71,7 @@ class RouterDecision:
     action: str                                   # "fire" | "no_trigger"
     tool_calls: List[ToolCall] = field(default_factory=list)
     reason: str = ""
-    source: str = "router"                        # router | pregate | fallback
+    source: str = "router"                        # router | pregate | fallback_llm | fallback
     model: str = ""
     latency_ms: float = 0.0
     retried: bool = False
@@ -82,12 +85,14 @@ class ToolRouter:
         llm_client: RouterLLMClient,
         registry: ToolRegistry,
         fallback_gate=None,
+        fallback_llm: Optional[RouterLLMClient] = None,
         timeout_s: float = DEFAULT_ROUTER_TIMEOUT_S,
     ):
         self.session_id = session_id
         self._llm = llm_client
         self._registry = registry
-        self._fallback = fallback_gate            # a TriggerGate, used on router failure
+        self._fallback = fallback_gate            # a TriggerGate — last resort if fallback_llm is also unavailable/fails
+        self._fallback_llm = fallback_llm          # a second, independent LLM (e.g. Gemini) tried first on primary failure
         self._timeout_s = timeout_s
         self._cooldown = CooldownTracker()
         # Serializes routing per session so the cooldown check-and-record is
@@ -138,20 +143,42 @@ class ToolRouter:
         self, speaker: str, text: str, context: str, now: float, in_flight_query: Optional[str]
     ) -> RouterDecision:
         user_content = self._build_user_content(speaker, text, context, in_flight_query)
-        tools = self._registry.openai_schemas()  # OpenAI/Ollama shape; Anthropic client re-shapes internally
+        tools = self._registry.openai_schemas()  # OpenAI/Ollama shape; Anthropic/Gemini clients re-shape internally
         t0 = time.perf_counter()
+        source = "router"
+        active_llm = self._llm
 
         try:
             resp = await asyncio.wait_for(
                 self._llm.create_with_tools(SYSTEM_PROMPT, user_content, tools),
                 timeout=self._timeout_s,
             )
-        except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001 — any LLM/network failure -> fallback
-            latency_ms = (time.perf_counter() - t0) * 1000
-            return self._fallback_decision(speaker, text, now, reason=f"router error: {e}", latency_ms=latency_ms)
+        except (asyncio.TimeoutError, Exception) as primary_err:  # noqa: BLE001 — any LLM/network failure
+            if self._fallback_llm is not None:
+                try:
+                    resp = await asyncio.wait_for(
+                        self._fallback_llm.create_with_tools(SYSTEM_PROMPT, user_content, tools),
+                        timeout=self._timeout_s,
+                    )
+                    source = "fallback_llm"
+                    active_llm = self._fallback_llm
+                    logger.warning(
+                        f"[{self.session_id}] primary router error ({primary_err}); "
+                        f"fallback LLM ({self._fallback_llm.model}) answered instead"
+                    )
+                except Exception as fallback_err:  # noqa: BLE001 — fallback LLM also failed -> deterministic tiers
+                    latency_ms = (time.perf_counter() - t0) * 1000
+                    return self._fallback_decision(
+                        speaker, text, now,
+                        reason=f"router error: {primary_err}; fallback_llm error: {fallback_err}",
+                        latency_ms=latency_ms,
+                    )
+            else:
+                latency_ms = (time.perf_counter() - t0) * 1000
+                return self._fallback_decision(speaker, text, now, reason=f"router error: {primary_err}", latency_ms=latency_ms)
 
         latency_ms = (time.perf_counter() - t0) * 1000
-        valid, retried = await self._parse_validate_retry(resp, user_content, tools)
+        valid, retried = await self._parse_validate_retry(resp, user_content, tools, active_llm)
 
         if valid:
             self._cooldown.record_trigger(now)
@@ -163,17 +190,18 @@ class ToolRouter:
             )
             return RouterDecision(
                 "fire", valid, reason="llm tool selection",
-                source="router", model=resp.model, latency_ms=latency_ms,
+                source=source, model=resp.model, latency_ms=latency_ms,
                 retried=retried, is_continuation=is_continuation,
             )
         return RouterDecision(
-            "no_trigger", reason="llm chose no tool", source="router",
+            "no_trigger", reason="llm chose no tool", source=source,
             model=resp.model, latency_ms=latency_ms, retried=retried,
         )
 
-    async def _parse_validate_retry(self, resp, user_content, tools):
+    async def _parse_validate_retry(self, resp, user_content, tools, llm_client: RouterLLMClient):
         """Validate the model's tool calls; on any failure, re-prompt once with
-        the errors and re-validate. Returns (valid_calls, retried?)."""
+        the errors and re-validate. Returns (valid_calls, retried?). Retries
+        against whichever client actually produced resp (primary or fallback)."""
         valid, errors = self._collect_valid(resp.tool_calls)
         if not errors:
             return valid, False
@@ -188,7 +216,7 @@ class ToolRouter:
         logger.debug(f"[{self.session_id}] router arg validation failed {errors}; retrying once")
         try:
             resp2 = await asyncio.wait_for(
-                self._llm.create_with_tools(SYSTEM_PROMPT, correction, tools),
+                llm_client.create_with_tools(SYSTEM_PROMPT, correction, tools),
                 timeout=self._timeout_s,
             )
         except Exception as e:  # noqa: BLE001
@@ -275,7 +303,7 @@ class ToolRouter:
         }
         # Visible (INFO) when the LLM was actually consulted or we fired; trivial
         # pre-gate skips (cooldown/backchannel/empty) stay at DEBUG to avoid spam.
-        visible = decision.action == "fire" or decision.source in ("router", "fallback")
+        visible = decision.action == "fire" or decision.source in ("router", "fallback_llm", "fallback")
         level = logging.INFO if visible else logging.DEBUG
         logger.log(level, f"router_decision {json.dumps(record, ensure_ascii=False)}")
         return decision

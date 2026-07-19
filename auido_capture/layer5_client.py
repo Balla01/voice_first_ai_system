@@ -41,12 +41,15 @@ class Layer5Response:
     llm_time_s: Optional[float] = None
     total_time_s: Optional[float] = None   # as reported BY THE API itself
     ask_ai_session_id: Optional[str] = None  # echoed/minted only when advanced_filter=True was sent
-    # True when the query was flagged as an ambiguous reference ("correct this
-    # suggestion" etc.) and needs the caller to pick a context_source before a
-    # real answer is produced — answer is "" in this case. See
-    # rag_pipeline/api.py's module docstring for the full contract.
-    needs_clarification: bool = False
-    clarification_options: Optional[list] = None
+    # Set only once an email has actually been dispatched (a confirm_email=True
+    # round-trip) — the recipient it was sent to.
+    emailed_to: Optional[str] = None
+    # True when the query was detected as an email-send request but hasn't
+    # been sent yet — answer holds the drafted text for the agent to review.
+    # Re-call query() with confirm_email=True + confirmed_answer=<this answer>
+    # to actually dispatch it.
+    needs_email_confirmation: bool = False
+    pending_email: Optional[dict] = None
     raw: dict = field(default_factory=dict)
 
 
@@ -88,11 +91,14 @@ class Layer5Client:
     async def query(
         self,
         query: str,
-        session_id: str,
-        customer_id: str,
+        session_id: Optional[str] = None,
+        customer_id: Optional[str] = None,
         advanced_filter: bool = False,
+        agent_id: Optional[str] = None,
         ask_ai_session_id: Optional[str] = None,
-        context_source: Optional[str] = None,
+        live_context: Optional[str] = None,
+        confirm_email: bool = False,
+        confirmed_answer: Optional[str] = None,
     ) -> Layer5Response:
         """
         Non-streaming call — returns the full answer plus the API's own
@@ -100,15 +106,25 @@ class Layer5Client:
         Use this when you want the timing numbers; use query_stream() for
         token-by-token delivery (which doesn't carry this metadata).
 
-        advanced_filter / ask_ai_session_id: opt-in Ask-AI "thread" mode (see
-        rag_pipeline/api.py). Omit ask_ai_session_id (leave None) to let the
-        server mint a new thread id, returned on the response — pass it back
-        in on the next call to continue that thread.
+        Two independent modes (see rag_pipeline/api.py's module docstring):
+          advanced_filter=False (AI Copilot's own call-scoped suggestions):
+            pass session_id + customer_id (today always the call's session id
+            for both — see main.py's tiers-fire / search_knowledge_base call
+            sites). agent_id/ask_ai_session_id/live_context are ignored.
+          advanced_filter=True (Ask-AI): pass agent_id (required — the logged-
+            in sales agent's identity) instead. session_id/customer_id are
+            ignored entirely; Ask-AI is fully decoupled from any call/session.
+            Omit ask_ai_session_id (leave None) to let the server mint a new
+            thread id, returned on the response — pass it back in on the next
+            call to continue that thread. live_context (optional): the
+            current call's live transcript/suggestion/profile, appended to
+            the prompt for THIS call only, never persisted.
 
-        context_source: resolves an ambiguous-reference clarification
-        ("suggestion_card" | "current_thread") — only has an effect when the
-        prior call for this same query came back with needs_clarification=True.
-        Leave None on a normal call.
+        confirm_email / confirmed_answer: resolves an email-send confirmation
+        — only has an effect when the prior call for this same query came back
+        with needs_email_confirmation=True. Pass confirmed_answer back exactly
+        as received (the answer the agent reviewed) so what's sent matches
+        what was approved. Leave False/None on a normal call.
         """
         payload = {
             "query": query,
@@ -116,8 +132,11 @@ class Layer5Client:
             "customer_id": customer_id,
             "stream": False,
             "advanced_filter": advanced_filter,
+            "agent_id": agent_id,
             "ask_ai_session_id": ask_ai_session_id,
-            "context_source": context_source,
+            "live_context": live_context,
+            "confirm_email": confirm_email,
+            "confirmed_answer": confirmed_answer,
         }
         logger.debug(f"Layer5 request: {payload}")
 
@@ -131,8 +150,9 @@ class Layer5Client:
             llm_time_s=data.get("llm_time_s"),
             total_time_s=data.get("total_time_s"),
             ask_ai_session_id=data.get("ask_ai_session_id"),
-            needs_clarification=data.get("needs_clarification", False),
-            clarification_options=data.get("clarification_options"),
+            emailed_to=data.get("emailed_to"),
+            needs_email_confirmation=data.get("needs_email_confirmation", False),
+            pending_email=data.get("pending_email"),
             raw=data,
         )
 
@@ -165,26 +185,36 @@ class Layer5Client:
         except Exception as e:
             logger.warning(f"Layer5 end_session failed for session={session_id}: {e}")
 
-    async def list_ask_ai_sessions(self, customer_id: str) -> dict:
-        """GET {base_url}/ask-ai/sessions?customer_id=... — returns
-        {customer_id, sessions: [{ask_ai_session_id, turn_count, last_query,
-        last_timestamp}, ...]}, most-recent-first. Raises on failure, same
+    async def list_ask_ai_sessions(self, agent_id: str) -> dict:
+        """GET {base_url}/ask-ai/sessions?agent_id=... — returns
+        {agent_id, sessions: [{ask_ai_session_id, turn_count, last_query,
+        last_timestamp}, ...]}, most-recent-first — every thread this agent
+        has ever created, across every call/session. Raises on failure, same
         style as query()/get_profile() — the caller turns it into an
         HTTPException."""
-        response = await self._client.get("/ask-ai/sessions", params={"customer_id": customer_id})
+        response = await self._client.get("/ask-ai/sessions", params={"agent_id": agent_id})
         response.raise_for_status()
         return response.json()
 
-    async def get_ask_ai_thread(self, customer_id: str, ask_ai_session_id: str) -> dict:
-        """GET {base_url}/ask-ai/thread?customer_id=...&ask_ai_session_id=... —
-        returns {customer_id, ask_ai_session_id, turns: [{query, answer,
+    async def get_ask_ai_thread(self, agent_id: str, ask_ai_session_id: str) -> dict:
+        """GET {base_url}/ask-ai/thread?agent_id=...&ask_ai_session_id=... —
+        returns {agent_id, ask_ai_session_id, turns: [{query, answer,
         timestamp}, ...]}, chronological. Raises on failure, same style as
         query()/get_profile()."""
         response = await self._client.get(
-            "/ask-ai/thread", params={"customer_id": customer_id, "ask_ai_session_id": ask_ai_session_id}
+            "/ask-ai/thread", params={"agent_id": agent_id, "ask_ai_session_id": ask_ai_session_id}
         )
         response.raise_for_status()
         return response.json()
+
+    async def delete_ask_ai_thread(self, agent_id: str, ask_ai_session_id: str) -> None:
+        """DELETE {base_url}/ask-ai/thread?agent_id=...&ask_ai_session_id=... —
+        permanently deletes one Ask-AI thread. Raises on failure, same style
+        as query()/get_profile()."""
+        response = await self._client.delete(
+            "/ask-ai/thread", params={"agent_id": agent_id, "ask_ai_session_id": ask_ai_session_id}
+        )
+        response.raise_for_status()
 
     async def query_stream(
         self, query: str, session_id: str, customer_id: str, stream: bool = True

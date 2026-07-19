@@ -8,6 +8,36 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- ============ Login overlay ============ -->
+  <div class="login-overlay" id="loginOverlay" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"></path>
+            <path d="M9 12l2 2 4-4"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">InsureAssist AI</div>
+          <div class="brand-sub">Sales agent sign in</div>
+        </div>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <label class="login-label" for="loginUsername">Username</label>
+        <input id="loginUsername" name="username" class="login-input" type="text" autocomplete="username" required />
+
+        <label class="login-label" for="loginPassword">Password</label>
+        <input id="loginPassword" name="password" class="login-input" type="password" autocomplete="current-password" required />
+
+        <button type="submit" class="start-call-btn login-submit" id="loginSubmit">Sign in</button>
+        <p class="login-error" id="loginError" style="display:none;"></p>
+        <button type="button" class="login-mode-toggle" id="loginModeToggle">New agent? Create an account</button>
+      </form>
+    </div>
+  </div>
+
   <!-- ============ Header ============ -->
   <header class="app-header">
     <div class="brand">
@@ -25,9 +55,16 @@
     <div class="header-right">
       <span class="call-id">Call ID <b id="callId">#—</b></span>
       <span class="call-timer" id="callTimer">00:00</span>
+      <span class="agent-badge" id="agentBadge"></span>
       <button id="themeToggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"></path>
+        </svg>
+      </button>
+      <button id="logoutBtn" class="icon-btn" title="Log out" aria-label="Log out">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"></path>
+          <path d="M16 17l5-5-5-5M21 12H9"></path>
         </svg>
       </button>
       <button id="startCallBtn" class="start-call-btn">
@@ -99,24 +136,6 @@
         <p class="panel-sub">Understands what the customer needs, live</p>
       </div>
 
-      <div class="intent-bar">
-        <span class="intent-label" id="intentLabel">No intent detected yet</span>
-        <span class="dot-sep">•</span>
-        <span class="intent-change">Change to:</span>
-        <select id="intentSelect" class="intent-select">
-          <option value="Policy Inquiry">Policy Inquiry</option>
-          <option value="Objection">Objection</option>
-          <option value="Premium Concern">Premium Concern</option>
-          <option value="Claim Question">Claim Question</option>
-          <option value="Exclusion Concern">Exclusion Concern</option>
-          <option value="Buying Signal">Buying Signal</option>
-        </select>
-        <button id="intentSend" class="btn-primary">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
-          Send
-        </button>
-      </div>
-
       <div class="suggested-label">SUGGESTED ANSWER</div>
       <div class="panel-body" id="suggestions">
         <div class="empty-state" id="sugEmpty">
@@ -143,7 +162,6 @@
       <div class="tabs">
         <button class="tab" data-tab="policy"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path><path d="M14 2v6h6"></path></svg><span>Policy</span></button>
         <button class="tab" data-tab="profile"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0116 0"></path></svg><span>Profile</span></button>
-        <button class="tab" data-tab="email"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg><span>Email</span></button>
         <button class="tab active" data-tab="askai"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"></path></svg><span>Ask AI</span></button>
       </div>
       <div class="tab-body">
@@ -165,9 +183,6 @@
             <div class="profile-fields" id="profileFields" style="display:none;"></div>
           </div>
         </div>
-        <div class="tab-pane" data-pane="email">
-          <div class="empty-state small"><div class="empty-title">No email drafted</div><div class="empty-sub">Use "Ask AI" to draft a follow-up, then it lands here.</div></div>
-        </div>
         <div class="tab-pane active" data-pane="askai">
           <div class="askai-head">
             <div class="askai-head-left">
@@ -180,6 +195,9 @@
               </select>
               <button id="askaiNewThread" class="icon-btn" title="Start a new Ask-AI thread" aria-label="Start a new Ask-AI thread">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+              </button>
+              <button id="askaiDeleteThread" class="icon-btn danger-btn" title="Delete this Ask-AI thread" aria-label="Delete this Ask-AI thread">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6h16z"></path></svg>
               </button>
             </div>
           </div>
@@ -198,8 +216,15 @@
               <button class="chip" data-ask="What objection should I prepare for next?">What objection should I prepare for next?</button>
             </div>
           </div>
+          <label class="call-context-toggle" id="callContextToggleRow">
+            <input type="checkbox" id="includeCallContext" />
+            Include Current Call Context
+          </label>
           <div class="askai-input-row">
-            <input id="askaiInput" class="askai-input" placeholder="Ask the copilot…" autocomplete="off">
+            <textarea id="askaiInput" class="askai-input" placeholder="Ask the copilot…" rows="1"></textarea>
+            <button id="askaiGmail" class="icon-btn gmail-btn" type="button" title="Draft an email" aria-label="Draft an email">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#EA4335" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg>
+            </button>
             <button id="askaiSend" class="btn-primary icon-only" aria-label="Send">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
             </button>
@@ -214,33 +239,171 @@
 
     const API_BASE = 'http://localhost:8000';
     const ASK_URL = `${API_BASE}/ask`;
+    const AGENT_STORAGE_KEY = 'insureassist_agent_id';
 
     // ---- element refs ----
     const $ = (id) => document.getElementById(id);
     const micToggle = $('micToggle'), sysToggle = $('sysToggle'), bothToggle = $('bothToggle');
     const listenStatus = $('listenStatus');
-    const callId = $('callId'), callTimer = $('callTimer');
+    const callId = $('callId'), callTimer = $('callTimer'), agentBadge = $('agentBadge');
+    const conversation = $('conversation');
     const transcript = $('transcript'), convoEmpty = $('convoEmpty');
     const suggestionList = $('suggestionList'), sugEmpty = $('sugEmpty');
-    const intentLabel = $('intentLabel'), intentSelect = $('intentSelect'), intentSend = $('intentSend');
     const readyStatus = $('readyStatus'), replayBtn = $('replayBtn');
-    const askaiFeed = $('askaiFeed'), askaiEmpty = $('askaiEmpty'), askaiInput = $('askaiInput'), askaiSend = $('askaiSend'), askaiNewThread = $('askaiNewThread');
+    const askaiFeed = $('askaiFeed'), askaiEmpty = $('askaiEmpty'), askaiInput = $('askaiInput'), askaiSend = $('askaiSend'), askaiGmail = $('askaiGmail'), askaiNewThread = $('askaiNewThread'), askaiDeleteThread = $('askaiDeleteThread');
     const askaiThreadBadge = $('askaiThreadBadge'), askaiThreadSelect = $('askaiThreadSelect');
+    const includeCallContext = $('includeCallContext');
     const profileBody = $('profileBody'), profileEmpty = $('profileEmpty'), profileFields = $('profileFields'), profileReload = $('profileReload');
-    const startCallBtn = $('startCallBtn'), endCallBtn = $('endCallBtn');
+    const startCallBtn = $('startCallBtn'), endCallBtn = $('endCallBtn'), logoutBtn = $('logoutBtn');
+    const loginOverlay = $('loginOverlay'), loginForm = $('loginForm'), loginError = $('loginError'), loginSubmit = $('loginSubmit');
+    const loginModeToggle = $('loginModeToggle');
 
     const SPEAKER_LABEL = { agent: 'Agent', customer: 'Customer' };
     const TOOL_LABEL = { search_knowledge_base: '📚 Knowledge base', refine_last_answer: '✏️ Refine' };
 
     let controller = null;
     let timerHandle = null, elapsed = 0;
-    let lastTurnText = '';
 
-    // Ask-AI "thread" id — distinct from controller.sessionId (the live call).
-    // In-memory only: resets on page reload, matching controller.sessionId's own
-    // behavior. null until either a first advanced-mode message gets one back
-    // from the server, or "+" mints one immediately client-side.
-    let askAiSessionId = null;
+    // Ask-AI "thread" id — distinct from controller.sessionId (the live call)
+    // and from agentId. In-memory only: resets on page reload. Ask-AI threads
+    // belong to the agent (agentId), not to any call/session — a thread stays
+    // usable with or without a call active. Minted immediately (not left
+    // null) so the very first message already has a stable thread id, same as
+    // every later "+ New Thread" click.
+    let askAiSessionId = crypto.randomUUID();
+
+    // Current call's live state, kept only in memory for as long as the call
+    // is active — used to build the optional "Include Current Call Context"
+    // blob. Never sent unless that checkbox is on, and never persisted into
+    // any Ask-AI thread's own memory (see rag_pipeline/api.py's _thread_context).
+    let liveTranscriptTurns = [];
+    let latestSuggestion = null;
+    let latestProfile = null;
+    const LIVE_CONTEXT_MAX_CHARS = 6000;
+
+    // ---- agent login / logout ----
+    let agentId = localStorage.getItem(AGENT_STORAGE_KEY);
+
+    // 'login' | 'register' — toggled by the "New agent? Create an account" /
+    // "Already have an account? Sign in" link, sharing the same two fields.
+    let loginMode = 'login';
+
+    function setLoginMode(mode) {
+      loginMode = mode;
+      if (mode === 'register') {
+        loginSubmit.textContent = 'Create account';
+        loginModeToggle.textContent = 'Already have an account? Sign in';
+        $('loginPassword').autocomplete = 'new-password';
+      } else {
+        loginSubmit.textContent = 'Sign in';
+        loginModeToggle.textContent = 'New agent? Create an account';
+        $('loginPassword').autocomplete = 'current-password';
+      }
+    }
+
+    loginModeToggle.onclick = () => {
+      loginError.style.display = 'none';
+      setLoginMode(loginMode === 'login' ? 'register' : 'login');
+    };
+
+    function showLoginOverlay() {
+      loginOverlay.hidden = false;
+      loginError.style.display = 'none';
+      loginForm.reset();
+      setLoginMode('login');
+    }
+
+    function hideLoginOverlay() {
+      loginOverlay.hidden = true;
+    }
+
+    // Explicit one-shot guard for the auto-restore-most-recent-thread behavior
+    // (see loadAskAiSessions) — belt-and-suspenders alongside its own
+    // askaiFeed.children.length===0 check, so it's unambiguous that this only
+    // ever runs once per login, never on later refreshes within the same
+    // session. Reset on logout so the NEXT login (same or different agent)
+    // gets its own single auto-restore.
+    let hasAutoRestoredThread = false;
+
+    function applyAgentId(id) {
+      agentId = id;
+      agentBadge.textContent = id ? `Agent: ${id}` : '';
+      // Ask AI is the default active tab, so its own onclick handler (which
+      // would normally call this) never fires on initial load — load the
+      // thread list explicitly whenever an agent becomes active (fresh page
+      // load with a stored id, or right after signing in), and restore the
+      // most recent thread's conversation into view exactly once.
+      if (id) {
+        loadAskAiSessions({ autoRestore: !hasAutoRestoredThread });
+        hasAutoRestoredThread = true;
+      }
+    }
+
+    if (agentId) {
+      applyAgentId(agentId);
+      hideLoginOverlay();
+    } else {
+      showLoginOverlay();
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loginError.style.display = 'none';
+      const username = $('loginUsername').value.trim();
+      const password = $('loginPassword').value;
+      if (!username || !password) return;
+
+      const endpoint = loginMode === 'register' ? '/auth/register' : '/auth/login';
+      const busyText = loginMode === 'register' ? 'Creating account…' : 'Signing in…';
+      const idleText = loginMode === 'register' ? 'Create account' : 'Sign in';
+
+      loginSubmit.disabled = true;
+      loginSubmit.textContent = busyText;
+      try {
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          // Registering also signs you in immediately — no separate step.
+          localStorage.setItem(AGENT_STORAGE_KEY, data.agent_id || username);
+          applyAgentId(data.agent_id || username);
+          hideLoginOverlay();
+        } else {
+          loginError.textContent = data.detail || 'Invalid username or password.';
+          loginError.style.display = '';
+        }
+      } catch (err) {
+        loginError.textContent = 'Could not reach the backend. Is auido_capture running on :8000?';
+        loginError.style.display = '';
+      } finally {
+        loginSubmit.disabled = false;
+        loginSubmit.textContent = idleText;
+      }
+    });
+
+    // Full reset (unlike End Call's resetCallUiState, which deliberately keeps
+    // Ask AI): stop any active call, clear every panel including Ask AI, clear
+    // the stored agent, show the login overlay again.
+    logoutBtn.onclick = () => {
+      controller?.stopAll();
+      controller = null;
+      resetCallUiState();
+
+      askaiFeed.innerHTML = '';
+      askaiEmpty.style.display = '';
+      askaiThreadSelect.innerHTML = '<option value="">New thread</option>';
+      askAiSessionId = crypto.randomUUID();
+      updateThreadBadge();
+      hasAutoRestoredThread = false; // next login gets its own one-shot auto-restore
+
+      localStorage.removeItem(AGENT_STORAGE_KEY);
+      applyAgentId(null);
+      syncToggles();
+      showLoginOverlay();
+    };
 
     // ---- capture / toggles ----
     function ensureController() {
@@ -258,6 +421,10 @@
       setSwitch(bothToggle, on.micOn && on.systemOn);
       startCallBtn.disabled = on.anyOn;   // already in a call
       endCallBtn.disabled = !on.anyOn;    // no call to end
+      // Nothing to include when there's no call — disable and uncheck rather
+      // than silently sending an empty/stale blob.
+      includeCallContext.disabled = !on.anyOn;
+      if (!on.anyOn) includeCallContext.checked = false;
       if (on.anyOn) {
         listenStatus.classList.add('live');
         listenStatus.innerHTML = '<span class="status-dot"></span> Listening';
@@ -331,27 +498,131 @@
       else if (data.type === 'suggestion') renderSuggestion(data);
     }
 
+    const NEAR_BOTTOM_PX = 80;
+    function isNearBottom(el) {
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    }
+
+    function formatClockTime(ms) {
+      return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+
     function renderTranscript(data) {
       convoEmpty.style.display = 'none';
-      lastTurnText = data.text;
+      // Only stick to the bottom if the user was already there — don't yank
+      // them back down if they've scrolled up to read earlier turns.
+      const shouldStick = isNearBottom(conversation);
       const line = document.createElement('div');
       line.className = `turn ${data.speaker}`;
       const meta = document.createElement('div');
       meta.className = 'turn-meta';
-      meta.textContent = SPEAKER_LABEL[data.speaker] || data.speaker;
+      const timestamp = data.time ? new Date(data.time).getTime() : Date.now();
+      meta.textContent = `${SPEAKER_LABEL[data.speaker] || data.speaker} · ${formatClockTime(timestamp)}`;
       const bubble = document.createElement('div');
       bubble.className = 'turn-bubble';
       bubble.textContent = data.text;
       line.append(meta, bubble);
       transcript.appendChild(line);
-      transcript.scrollTop = transcript.scrollHeight;
+      if (shouldStick) conversation.scrollTop = conversation.scrollHeight;
+
+      // Kept only for the optional "Include Current Call Context" toggle —
+      // never persisted anywhere, cleared on End Call/logout.
+      liveTranscriptTurns.push({ speaker: data.speaker, text: data.text });
+    }
+
+    function buildLiveContext() {
+      const lines = liveTranscriptTurns.map((t) => `${SPEAKER_LABEL[t.speaker] || t.speaker}: ${t.text}`);
+      let transcriptText = lines.join('\n');
+      if (transcriptText.length > LIVE_CONTEXT_MAX_CHARS) {
+        transcriptText = '[earlier turns truncated]\n' + transcriptText.slice(-LIVE_CONTEXT_MAX_CHARS);
+      }
+
+      const parts = [];
+      if (transcriptText) parts.push(`--- Live call transcript so far ---\n${transcriptText}`);
+      if (latestSuggestion) {
+        parts.push(`--- Latest AI Copilot suggestion ---\nQ: ${latestSuggestion.query}\nA: ${latestSuggestion.answer}`);
+      }
+      if (latestProfile) {
+        const profileLines = Object.entries(latestProfile)
+          .filter(([, v]) => v)
+          .map(([k, v]) => `${PROFILE_LABELS[k] || k}: ${v}`);
+        if (profileLines.length) parts.push(`--- Customer profile ---\n${profileLines.join('\n')}`);
+      }
+      return parts.join('\n\n');
+    }
+
+    // ---- lightweight Markdown renderer (bold/italic/lists/headings/inline code/paragraphs) ----
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderInlineMarkdown(text) {
+      let s = escapeHtml(text);
+      s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+      s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      s = s.replace(/(^|[^\w])_([^_]+)_(?!\w)/g, '$1<em>$2</em>');
+      return s;
+    }
+
+    function renderMarkdown(raw) {
+      if (!raw) return '';
+      const lines = String(raw).replace(/\r\n/g, '\n').split('\n');
+      let html = '';
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i];
+        if (!line.trim()) { i++; continue; }
+
+        const heading = line.match(/^(#{1,6})\s+(.*)/);
+        if (heading) {
+          const level = heading[1].length;
+          html += `<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`;
+          i++; continue;
+        }
+
+        if (/^\s*[-*]\s+/.test(line)) {
+          let items = '';
+          while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+            items += `<li>${renderInlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ''))}</li>`;
+            i++;
+          }
+          html += `<ul>${items}</ul>`;
+          continue;
+        }
+
+        if (/^\s*\d+\.\s+/.test(line)) {
+          let items = '';
+          while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+            items += `<li>${renderInlineMarkdown(lines[i].replace(/^\s*\d+\.\s+/, ''))}</li>`;
+            i++;
+          }
+          html += `<ol>${items}</ol>`;
+          continue;
+        }
+
+        const paraLines = [];
+        while (
+          i < lines.length && lines[i].trim() &&
+          !/^(#{1,6})\s+/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i])
+        ) {
+          paraLines.push(renderInlineMarkdown(lines[i]));
+          i++;
+        }
+        if (paraLines.length) html += `<p>${paraLines.join('<br>')}</p>`;
+      }
+      return html;
     }
 
     function renderSuggestion(data) {
       sugEmpty.style.display = 'none';
       readyStatus.textContent = 'Answered';
       replayBtn.disabled = false;
-      if (data.query) intentLabel.textContent = 'Detected · ' + truncate(data.query, 40);
+
+      // Kept only for the optional "Include Current Call Context" toggle —
+      // never persisted anywhere, cleared on End Call/logout.
+      latestSuggestion = { query: data.query || '', answer: data.answer || '' };
 
       const card = document.createElement('div');
       card.className = 'sug-card new';
@@ -371,9 +642,9 @@
         tool.textContent = TOOL_LABEL[data.tool] || data.tool;
         head.append(tool);
       }
-      const ans = document.createElement('p');
+      const ans = document.createElement('div');
       ans.className = 'sug-answer';
-      ans.textContent = data.answer;
+      ans.innerHTML = renderMarkdown(data.answer);
       const copy = document.createElement('button');
       copy.className = 'copy-btn';
       copy.textContent = 'Copy';
@@ -384,33 +655,28 @@
     }
 
     // ---- Ask AI / intent Send (POST /ask) ----
-    // Ask AI works with or without an active call (falls back to 'ask-adhoc'),
-    // so every function that talks to the Ask-AI endpoints (send, list threads,
-    // switch thread) must resolve the session id the SAME way — otherwise
-    // threads saved under one id silently never show up when looked up under
-    // another (this was the bug: loadAskAiSessions used to bail out entirely
-    // when no call was active, instead of also falling back to 'ask-adhoc').
-    function currentAskSessionId() {
-      return controller?.sessionId || 'ask-adhoc';
-    }
-
+    // Ask AI is owned by agentId alone — works identically with or without an
+    // active call, and never touches session_id/customer_id at all (see
+    // rag_pipeline/api.py's module docstring).
     async function askCopilot(text, target, opts = {}) {
       if (!text || !text.trim()) return;
       const pending = appendAskCard(target, text, '…thinking', true);
       await runAskRequest(pending, text, opts);
     }
 
-    // Separated from askCopilot so the clarification flow (see
-    // setClarification above) can re-run the SAME request against the SAME
-    // card once the user picks an option, instead of spawning a new one —
-    // "the card then updates to the real answer" rather than a second card
-    // appearing below it.
+    // Separated from askCopilot so the email-confirmation flow (see
+    // setEmailConfirmation below) can re-run the SAME request against the SAME
+    // card once the agent confirms, instead of spawning a new one — "the card
+    // then updates in place" rather than a second card appearing below it.
     async function runAskRequest(pending, text, opts = {}) {
-      const body = { question: text, session_id: currentAskSessionId() };
-      if (opts.advanced) {
-        body.advanced_filter = true;
-        body.ask_ai_session_id = askAiSessionId; // null on the thread's first message
-        if (opts.contextSource) body.context_source = opts.contextSource;
+      const body = { question: text, agent_id: agentId, ask_ai_session_id: askAiSessionId };
+      if (opts.includeCallContext) {
+        const lc = buildLiveContext();
+        if (lc) body.live_context = lc;
+      }
+      if (opts.confirmEmail) {
+        body.confirm_email = true;
+        body.confirmed_answer = opts.confirmedAnswer;
       }
       try {
         const res = await fetch(ASK_URL, {
@@ -420,18 +686,25 @@
         });
         const data = await res.json();
         if (res.ok) {
-          if (opts.advanced && data.ask_ai_session_id) {
+          if (data.ask_ai_session_id && data.ask_ai_session_id !== askAiSessionId) {
             askAiSessionId = data.ask_ai_session_id;
             updateThreadBadge();
-            loadAskAiSessions(); // refresh dropdown so this thread's timestamp/entry updates
           }
-          if (data.needs_clarification) {
-            pending.setClarification(data.clarification_options || [], (value) => {
-              pending.setPending();
-              runAskRequest(pending, text, { ...opts, contextSource: value });
+          // Always refresh, not just when the id changed — the client mints
+          // askAiSessionId up front now (never null), so the id is virtually
+          // always unchanged; the dropdown still needs the latest
+          // last_query/timestamp for THIS thread (or a brand-new entry for it
+          // the first time it gets a real turn saved).
+          loadAskAiSessions();
+          if (data.needs_email_confirmation) {
+            // Nothing has been sent yet — show the draft and ask before dispatching.
+            pending.setAnswer(data.answer || '(no answer)');
+            pending.setEmailConfirmation(data.pending_email, () => {
+              runAskRequest(pending, text, { ...opts, confirmEmail: true, confirmedAnswer: data.answer });
             });
           } else {
             pending.setAnswer(data.answer || '(no answer)');
+            if (data.emailed_to) pending.setEmailSent(data.emailed_to);
           }
         } else {
           pending.setAnswer('⚠ ' + (data.detail || 'request failed'), true);
@@ -451,9 +724,9 @@
       tag.className = 'sug-tag';
       tag.textContent = question;
       head.append(tag);
-      const ans = document.createElement('p');
+      const ans = document.createElement('div');
       ans.className = 'sug-answer' + (isPending ? ' pending' : '');
-      ans.textContent = initial;
+      ans.innerHTML = renderMarkdown(initial);
       card.append(head, ans);
       target.prepend(card);
       setTimeout(() => card.classList.remove('new'), 1200);
@@ -461,45 +734,84 @@
         setAnswer(text, isErr) {
           ans.classList.remove('pending');
           if (isErr) ans.classList.add('err');
-          ans.textContent = text;
+          ans.innerHTML = renderMarkdown(text);
         },
         setPending() {
           ans.classList.add('pending');
-          ans.textContent = '…thinking';
+          ans.innerHTML = renderMarkdown('…thinking');
         },
-        setClarification(options, onPick) {
-          ans.classList.remove('pending');
-          ans.textContent = '';
-          ans.append('Are you talking about: ');
-          for (const opt of options) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'clarify-btn';
-            btn.textContent = opt.label;
-            btn.onclick = () => onPick(opt.value);
-            ans.appendChild(btn);
-          }
+        // Nothing gets emailed until the agent explicitly confirms here —
+        // see rag_pipeline/api.py's needs_email_confirmation/confirm_email.
+        setEmailConfirmation(pendingEmail, onConfirm) {
+          const prompt = document.createElement('div');
+          prompt.className = 'email-confirm';
+          const label = document.createElement('span');
+          label.textContent = `Send this email to ${pendingEmail?.to || '(unknown recipient)'}? `;
+          const yesBtn = document.createElement('button');
+          yesBtn.type = 'button';
+          yesBtn.className = 'clarify-btn';
+          yesBtn.textContent = 'Yes, send';
+          yesBtn.onclick = () => { prompt.remove(); onConfirm(); };
+          const noBtn = document.createElement('button');
+          noBtn.type = 'button';
+          noBtn.className = 'clarify-btn';
+          noBtn.textContent = 'No';
+          noBtn.onclick = () => prompt.remove();
+          prompt.append(label, yesBtn, noBtn);
+          card.appendChild(prompt);
+        },
+        setEmailSent(to) {
+          const note = document.createElement('div');
+          note.className = 'email-sent-note';
+          note.textContent = `✓ Emailed to ${to}`;
+          card.appendChild(note);
         },
       };
     }
 
-    intentSend.onclick = () => {
-      const intent = intentSelect.value;
-      const base = lastTurnText || '';
-      if (!base) { flashReady('Nothing to send yet — start the conversation first.'); return; }
-      askCopilot(`[Intent: ${intent}] ${base}`, suggestionList);
-      sugEmpty.style.display = 'none';
+    document.querySelectorAll('.chip').forEach((chip) => {
+      chip.onclick = () => askCopilot(chip.dataset.ask, askaiFeed, { includeCallContext: includeCallContext.checked });
+    });
+    askaiSend.onclick = () => {
+      const v = askaiInput.value;
+      const opts = { includeCallContext: includeCallContext.checked };
+      askaiInput.value = '';
+      autoResizeAskaiInput();
+      askCopilot(v, askaiFeed, opts);
+    };
+    // Enter sends (matches a normal chat app); Shift+Enter inserts a line
+    // break — needed now that askaiInput is a textarea (multi-line email
+    // drafts via the Gmail button below need real newlines to edit).
+    askaiInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askaiSend.onclick(); }
+    });
+
+    function autoResizeAskaiInput() {
+      askaiInput.style.height = 'auto';
+      askaiInput.style.height = Math.min(askaiInput.scrollHeight, 120) + 'px';
+    }
+    askaiInput.addEventListener('input', autoResizeAskaiInput);
+
+    // Gmail icon — prefills a fill-in-the-blanks email template into the Ask
+    // AI box (not a separate composer/popup); the user edits it and sends it
+    // through the normal Ask AI flow like any other question, letting the AI
+    // draft the actual email text.
+    const EMAIL_TEMPLATE_PREFIX = 'Write an email to:\n\nRecipient: ';
+    const EMAIL_TEMPLATE_PLACEHOLDER = '<enter email address>';
+    const EMAIL_TEMPLATE_SUFFIX = '\n\nSubject: \n\nBody:\n<describe what you want to write>';
+    askaiGmail.onclick = () => {
+      askaiInput.value = EMAIL_TEMPLATE_PREFIX + EMAIL_TEMPLATE_PLACEHOLDER + EMAIL_TEMPLATE_SUFFIX;
+      autoResizeAskaiInput();
+      askaiInput.focus();
+      const start = EMAIL_TEMPLATE_PREFIX.length;
+      askaiInput.setSelectionRange(start, start + EMAIL_TEMPLATE_PLACEHOLDER.length);
     };
 
-    document.querySelectorAll('.chip').forEach((chip) => {
-      chip.onclick = () => askCopilot(chip.dataset.ask, askaiFeed, { advanced: true });
-    });
-    askaiSend.onclick = () => { const v = askaiInput.value; askaiInput.value = ''; askCopilot(v, askaiFeed, { advanced: true }); };
-    askaiInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { askaiSend.onclick(); } });
-
     // ---- Ask-AI thread switcher (badge + dropdown) ----
+    // Threads belong to agentId, not to any call/session — the switcher lists
+    // every thread this agent has ever created, across every call they've had.
     function updateThreadBadge() {
-      askaiThreadBadge.textContent = askAiSessionId ? askAiSessionId.slice(0, 8) : 'New thread';
+      askaiThreadBadge.textContent = askAiSessionId.slice(0, 8);
     }
 
     function formatThreadTimestamp(iso) {
@@ -509,13 +821,24 @@
       return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
-    async function loadAskAiSessions() {
-      const sid = currentAskSessionId();
+    async function loadAskAiSessions(opts = {}) {
+      if (!agentId) return;
       try {
-        const res = await fetch(`${API_BASE}/ask-ai/sessions?session_id=${sid}`);
+        const res = await fetch(`${API_BASE}/ask-ai/sessions?agent_id=${encodeURIComponent(agentId)}`);
         if (!res.ok) { console.warn('loadAskAiSessions: request failed', res.status); return; }
         const data = await res.json();
         const sessions = data.sessions || [];
+
+        // Fresh page load / just signed in, with no conversation in view yet
+        // and at least one saved thread — restore the most recent one
+        // automatically instead of leaving an empty "new thread" showing.
+        // Gated behind opts.autoRestore (only passed from the initial
+        // applyAgentId call) so this never fires after the agent has
+        // already sent a message or deliberately switched/started a thread.
+        if (opts.autoRestore && sessions.length > 0 && askaiFeed.children.length === 0) {
+          await switchAskAiThread(sessions[0].ask_ai_session_id);
+        }
+
         askaiThreadSelect.innerHTML = '';
         const newOpt = document.createElement('option');
         newOpt.value = '';
@@ -529,16 +852,15 @@
           opt.textContent = preview ? `${stamp} · ${preview}` : stamp;
           askaiThreadSelect.appendChild(opt);
         }
-        askaiThreadSelect.value = askAiSessionId || '';
+        askaiThreadSelect.value = askAiSessionId;
       } catch (e) {
         console.warn('loadAskAiSessions: could not reach backend', e);
       }
     }
 
     async function switchAskAiThread(threadId) {
-      const sid = currentAskSessionId();
       try {
-        const res = await fetch(`${API_BASE}/ask-ai/thread?session_id=${sid}&ask_ai_session_id=${threadId}`);
+        const res = await fetch(`${API_BASE}/ask-ai/thread?agent_id=${encodeURIComponent(agentId)}&ask_ai_session_id=${threadId}`);
         const data = await res.json();
         if (!res.ok) { flashReady('⚠ Could not load that thread'); return; }
         askaiFeed.innerHTML = '';
@@ -557,7 +879,7 @@
     askaiThreadSelect.onchange = () => {
       const value = askaiThreadSelect.value;
       if (!value) {
-        askAiSessionId = null;
+        askAiSessionId = crypto.randomUUID();
         askaiFeed.innerHTML = '';
         askaiEmpty.style.display = '';
         updateThreadBadge();
@@ -572,6 +894,32 @@
       askaiEmpty.style.display = '';
       updateThreadBadge();
       askaiThreadSelect.value = '';
+    };
+
+    askaiDeleteThread.onclick = async () => {
+      const hasContent = askaiFeed.children.length > 0;
+      const label = hasContent ? 'this Ask-AI thread' : 'this empty thread';
+      if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/ask-ai/thread?agent_id=${encodeURIComponent(agentId)}&ask_ai_session_id=${askAiSessionId}`,
+          { method: 'DELETE' }
+        );
+        if (!res.ok) { flashReady('⚠ Could not delete that thread'); return; }
+      } catch (e) {
+        flashReady('⚠ Could not reach the backend (/ask-ai/thread)');
+        return;
+      }
+
+      // Same as starting fresh — a deleted thread is gone, so there's nothing
+      // to keep showing.
+      askAiSessionId = crypto.randomUUID();
+      askaiFeed.innerHTML = '';
+      askaiEmpty.style.display = '';
+      updateThreadBadge();
+      askaiThreadSelect.value = '';
+      loadAskAiSessions();
     };
 
     // ---- Profile tab (GET /profile) ----
@@ -594,6 +942,10 @@
     }
 
     function renderProfile(profile) {
+      // Kept only for the optional "Include Current Call Context" toggle —
+      // never persisted anywhere, cleared on End Call/logout.
+      latestProfile = profile;
+
       profileEmpty.style.display = 'none';
       profileFields.style.display = '';
       profileFields.innerHTML = '';
@@ -630,12 +982,43 @@
       root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
     };
 
+    // Resets everything call-specific back to a fresh-load appearance —
+    // EXCEPT the Ask AI chat, which intentionally survives End Call (the
+    // agent should still be able to see what they discussed with Ask AI
+    // during that session; it only clears on an explicit new thread).
+    function resetCallUiState() {
+      transcript.innerHTML = '';
+      convoEmpty.style.display = '';
+
+      suggestionList.innerHTML = '';
+      sugEmpty.style.display = '';
+      replayBtn.disabled = true;
+
+      profileFields.innerHTML = '';
+      profileFields.style.display = 'none';
+      profileEmpty.style.display = '';
+
+      callId.textContent = '#—';
+
+      // Live-call state backing "Include Current Call Context" — never part
+      // of Ask AI's own memory, just cleared along with the rest of the call.
+      liveTranscriptTurns = [];
+      latestSuggestion = null;
+      latestProfile = null;
+      includeCallContext.checked = false;
+
+      // So the NEXT "Start call" mints a brand-new CaptureController/session_id
+      // instead of resuming the call that just ended.
+      controller = null;
+    }
+
     endCallBtn.onclick = () => {
       const sid = controller?.sessionId;
       controller?.stopAll();
       if (sid) fetch(`${API_BASE}/session/${sid}/reset`, { method: 'POST' }).catch(() => {});
       stopTimer();
       elapsed = 0; callTimer.textContent = '00:00';
+      resetCallUiState();
       syncToggles();
       readyStatus.textContent = 'Call ended';
     };
@@ -643,7 +1026,6 @@
     replayBtn.onclick = () => { suggestionList.scrollTop = 0; };
 
     // ---- small helpers ----
-    function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
     function flashStatus(msg) { listenStatus.innerHTML = '<span class="status-dot"></span> ' + msg; }
     function flashReady(msg) { const prev = readyStatus.textContent; readyStatus.textContent = msg; setTimeout(() => readyStatus.textContent = prev, 2500); }
 

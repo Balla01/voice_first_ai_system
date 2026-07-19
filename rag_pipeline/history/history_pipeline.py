@@ -13,6 +13,7 @@ Each point is tagged with session_id + customer_id for filtered retrieval.
 """
 
 import gc
+import logging
 import os
 import sys
 import threading
@@ -45,6 +46,8 @@ from constants import (
     USE_QUERY_FILTER,
 )
 from data_dump.embedder import embed_query_hybrid
+
+logger = logging.getLogger("rag_api.history")
 
 # Separate sub-folder so history DB and summary DB don't share the same
 # Qdrant storage when both are persistent.
@@ -131,6 +134,51 @@ class RuntimeHistory:
     summary_client  — persistent Qdrant on disk, survives restarts
     """
 
+    # Every RuntimeHistory instance (one per active session_id+customer_id)
+    # shares these three clients at the CLASS level rather than opening its
+    # own — history_client/summary_client/docs_client all point at the same
+    # physical Qdrant storage folders regardless of which session opens them
+    # (rows are scoped by the session_id/customer_id payload filter above,
+    # not by separate storage), and Qdrant's embedded/local mode only allows
+    # one open handle per folder. Two sessions alive at once (e.g. a live
+    # call plus an Ask-AI ad-hoc lookup) used to crash the second one's
+    # QdrantClient(path=...) with "already accessed by another instance of
+    # Qdrant client" — mirrors how AskAIStore next door is already a single
+    # process-wide instance for the same reason.
+    _shared_lock = threading.Lock()
+    _shared_history_client = None
+    _shared_summary_client = None
+    _shared_docs_client = None
+
+    @classmethod
+    def _get_shared_clients(cls):
+        with cls._shared_lock:
+            if cls._shared_summary_client is None:
+                if CLEAR_RUNTIME_HISTORY:
+                    cls._shared_history_client = QdrantClient(":memory:")
+                else:
+                    HISTORY_DB_DIR.mkdir(parents=True, exist_ok=True)
+                    cls._shared_history_client = QdrantClient(path=str(HISTORY_DB_DIR))
+
+                HISTORY_SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+                cls._shared_summary_client = QdrantClient(path=str(HISTORY_SUMMARY_DIR))
+
+                # Product-docs collection — separate on-disk Qdrant storage,
+                # populated by the data_dump ingestion pipeline (read-only from here).
+                DOCS_VECTOR_DIR.mkdir(parents=True, exist_ok=True)
+                cls._shared_docs_client = QdrantClient(path=str(DOCS_VECTOR_DIR))
+        return cls._shared_history_client, cls._shared_summary_client, cls._shared_docs_client
+
+    @classmethod
+    def close_shared_clients(cls):
+        """Actually releases the Qdrant locks — call once at process shutdown,
+        never per-session (other sessions may still be using them)."""
+        with cls._shared_lock:
+            for client in (cls._shared_history_client, cls._shared_summary_client, cls._shared_docs_client):
+                if client is not None:
+                    client.close()
+            cls._shared_history_client = cls._shared_summary_client = cls._shared_docs_client = None
+
     def __init__(self, session_id: str, customer_id: str):
         self.session_id  = session_id
         self.customer_id = customer_id
@@ -138,24 +186,9 @@ class RuntimeHistory:
         self._known_plans_cache = None      # distinct docs plan_names, lazily scrolled once
         self._known_categories_cache = None # distinct docs categories, lazily scrolled once
 
-        # Runtime history: RAM-only when CLEAR_RUNTIME_HISTORY=True,
-        # persistent disk when False (survives restarts, queryable later).
-        if CLEAR_RUNTIME_HISTORY:
-            self.history_client = QdrantClient(":memory:")
-        else:
-            HISTORY_DB_DIR.mkdir(parents=True, exist_ok=True)
-            self.history_client = QdrantClient(path=str(HISTORY_DB_DIR))
+        self.history_client, self.summary_client, self.docs_client = self._get_shared_clients()
         self._create_collection(self.history_client, HISTORY_COLLECTION)
-
-        # Summary collection — always persistent on disk
-        HISTORY_SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
-        self.summary_client = QdrantClient(path=str(HISTORY_SUMMARY_DIR))
         self._create_collection(self.summary_client, SUMMARY_COLLECTION)
-
-        # Product-docs collection — separate on-disk Qdrant storage, populated
-        # by the data_dump ingestion pipeline (read-only from here).
-        DOCS_VECTOR_DIR.mkdir(parents=True, exist_ok=True)
-        self.docs_client = QdrantClient(path=str(DOCS_VECTOR_DIR))
 
         mode = "RAM (wiped on session end)" if CLEAR_RUNTIME_HISTORY else f"disk ({HISTORY_DB_DIR})"
         print(f"Session started  | session_id={session_id} | customer_id={customer_id}")
@@ -485,12 +518,22 @@ class RuntimeHistory:
                 return [(t, s, "") for t, s in reranked]
 
             return fused[:k]
-        except Exception:
+        except Exception as e:
+            # Previously silent (bare `except: return []`) — a missing/broken
+            # dependency (e.g. FlagEmbedding not installed) or any other
+            # retrieval failure looked identical to "no matching docs" in the
+            # logs, with zero indication anything was actually wrong. Log the
+            # real error (with traceback) so a genuine 0-result query is still
+            # distinguishable from a broken retrieval path.
+            logger.error(f"[docs] search_docs_scored failed for query={query!r}: {e}", exc_info=True)
             return []
 
     # ── Cleanup ───────────────────────────────────────────────────────────────
 
     def close(self):
-        self.history_client.close()
-        self.summary_client.close()
-        self.docs_client.close()
+        """No-op: history_client/summary_client/docs_client are process-wide
+        singletons shared by every active session (see _get_shared_clients) —
+        closing them here on one session's end would break every other
+        session still using them. Use RuntimeHistory.close_shared_clients()
+        at actual process shutdown instead."""
+        pass

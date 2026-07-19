@@ -15,6 +15,7 @@ Env:
 """
 
 import os
+import re
 import time
 import base64
 import asyncio
@@ -32,11 +33,11 @@ from errors import ClassifiedError, ErrorAction
 from layer3 import SessionTracker, EpochCompactor, get_llm_client, Persistence
 from layer4 import (
     TriggerGate,
-    Tier2EmbeddingClassifier,
     GenerationController,
     GenerationManager,
     ToolRouter,
     get_router_client,
+    get_fallback_router_client,
     build_default_registry,
     execute_tool_calls,
     ExecutionContext,
@@ -44,6 +45,7 @@ from layer4 import (
 from layer5_client import Layer5Client
 from twilio_voice import router as twilio_router
 from profile_extractor import extract_profile, merge_profile, new_profile
+import agent_store
 
 from logging_config import setup_logging
 setup_logging()
@@ -102,11 +104,6 @@ _mic_sockets: dict[str, WebSocket] = {}
 _persistence: Persistence | None = None
 _compactor: EpochCompactor | None = None
 
-# Layer 4's Tier 2 embedding classifier loads the MiniLM model once and holds
-# no session-specific state itself — shared across all TriggerGate instances
-# so we're not reloading the model per session.
-_tier2_classifier: Tier2EmbeddingClassifier | None = None
-
 # Layer 5 client (HTTP) and the abort controller that wraps every call to it.
 # Both are stateless-enough to share across all sessions — GenerationController
 # tracks per-session in-flight tasks internally via a dict keyed by session_id.
@@ -124,6 +121,7 @@ _generation_manager = GenerationManager(
 # LAYER4_TRIGGER_MODE == "router".
 _tool_registry = build_default_registry()
 _router_llm = None
+_router_fallback_llm = None   # second, independent LLM tried when _router_llm errors; None disables it (tiers-only fallback)
 
 # Shared chat LLM for live profile extraction (same provider as Layer 3, chosen
 # via LLM_PROVIDER). Built at startup; None if no provider key is configured, in
@@ -242,12 +240,14 @@ async def _run_router_tools(session_id: str, tool_calls) -> None:
 
 @app.on_event("startup")
 async def startup():
-    global _persistence, _compactor, _tier2_classifier, _layer5_client, _router_llm, _profile_llm
+    global _persistence, _compactor, _layer5_client, _router_llm, _router_fallback_llm, _profile_llm
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set — see .env.example")
     print("DATABASE_URL =", DATABASE_URL)
     _persistence = Persistence(dsn=DATABASE_URL)
     await _persistence.connect()   # also runs schema init (CREATE TABLE IF NOT EXISTS)
+
+    await asyncio.to_thread(agent_store.ensure_seeded)   # sales_agents table + default demo agent
 
     _compactor = EpochCompactor(client=get_llm_client())   # provider chosen via LLM_PROVIDER env var
 
@@ -256,8 +256,6 @@ async def startup():
     except Exception as e:
         logger.warning(f"Profile extraction disabled — no LLM client: {e}")
         _profile_llm = None
-
-    _tier2_classifier = Tier2EmbeddingClassifier()   # logs a warning + degrades gracefully if MiniLM can't load
 
     _layer5_client = Layer5Client(base_url=LAYER5_URL)
 
@@ -271,6 +269,17 @@ async def startup():
     except Exception as e:
         _router_llm = None
         logger.warning(f"Layer 4 router client unavailable ({e}); router mode disabled until fixed")
+
+    # Second, independent LLM tried when _router_llm errors mid-call (not a
+    # config problem, a live failure) — before dropping to the deterministic
+    # TriggerGate. Soft dependency: None just means that safety net is skipped.
+    try:
+        _router_fallback_llm = get_fallback_router_client()
+        if _router_fallback_llm is not None:
+            logger.info(f"Layer 4 router fallback LLM ready (model={_router_fallback_llm.model})")
+    except Exception as e:
+        _router_fallback_llm = None
+        logger.warning(f"Layer 4 router fallback LLM unavailable ({e}); primary router errors will drop straight to TriggerGate")
 
     if _runtime_trigger_mode == "router" and _router_llm is None:
         logger.warning("LAYER4_TRIGGER_MODE=router but router client unavailable -> running in TIERS")
@@ -287,6 +296,8 @@ async def shutdown():
         await _layer5_client.close()
     if _router_llm:
         await _router_llm.close()
+    if _router_fallback_llm:
+        await _router_fallback_llm.close()
 
 
 def _make_segment_handler(session_id: str):
@@ -472,7 +483,7 @@ async def _get_or_create_router(
 
         # The deterministic gate is always created: it's the tiers-mode gate AND
         # the per-turn fallback the router delegates to on timeout/error.
-        gate = TriggerGate(session_id=session_id, tier2_classifier=_tier2_classifier)
+        gate = TriggerGate(session_id=session_id)
         _gates[session_id] = gate
         # Create the ToolRouter whenever a router client exists (regardless of the
         # current mode), so a live switch TO router works for sessions that were
@@ -483,6 +494,7 @@ async def _get_or_create_router(
                 llm_client=_router_llm,
                 registry=_tool_registry,
                 fallback_gate=gate,
+                fallback_llm=_router_fallback_llm,
             )
 
         # Debounce STT fragments into complete turns before Layer 3/Layer 4 see
@@ -550,45 +562,94 @@ async def intent_override(payload: dict = Body(...)):
     return {"ok": True, "intent": _manual_intents[session_id]}
 
 
+@app.post("/auth/login")
+async def auth_login(payload: dict = Body(...)):
+    """Basic username/password check against sales_agents (agent_store.py).
+    No session tokens/expiry — the frontend just remembers agent_id (the
+    username) in localStorage after a successful login. Returns {ok:False,
+    detail:...} rather than a 4xx status, matching this app's other
+    expected-failure endpoints (/intent/override, /admin/trigger-mode)."""
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    ok = await asyncio.to_thread(agent_store.verify_agent, username, password)
+    if not ok:
+        return {"ok": False, "detail": "Invalid username or password."}
+    return {"ok": True, "agent_id": username}
+
+
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
+
+
+@app.post("/auth/register")
+async def auth_register(payload: dict = Body(...)):
+    """Creates a new sales agent account. Never overwrites an existing
+    account — refuses (ok:False) if the username is already taken."""
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not _USERNAME_RE.match(username):
+        return {"ok": False, "detail": "Username must be 3-32 characters (letters, numbers, . _ -)."}
+    if len(password) < 4:
+        return {"ok": False, "detail": "Password must be at least 4 characters."}
+    created = await asyncio.to_thread(agent_store.register_agent, username, password)
+    if not created:
+        return {"ok": False, "detail": "That username is already taken."}
+    return {"ok": True, "agent_id": username}
+
+
 @app.post("/ask")
 async def ask_ai(payload: dict = Body(...)):
-    """Ad-hoc 'Ask AI' box in the sidebar — forwards a free-text question to
-    Layer 5 (RAG) in the same session so it has call context. Degrades to a
-    clear message if Layer 5 is unavailable.
+    """Ask AI — forwards a free-text question to Layer 5 (RAG). Owned by
+    agent_id (the logged-in sales agent), NOT by any call/session — works
+    identically whether or not a call is active. Degrades to a clear message
+    if Layer 5 is unavailable.
 
-    advanced_filter / ask_ai_session_id: pass-through for Layer 5's Ask-AI
-    "thread" mode. When advanced_filter=True and ask_ai_session_id is
-    omitted/None, Layer 5 mints a new thread id, returned below so the
-    frontend can send it back on the next question in that thread.
+    agent_id: required. The logged-in agent's username (see /auth/login) —
+    Ask-AI threads belong to this, never to session_id.
 
-    context_source: pass-through for resolving an ambiguous-reference
-    clarification ("suggestion_card" | "current_thread") — see
-    rag_pipeline/api.py. When the question is flagged ambiguous and
-    context_source wasn't given, needs_clarification=True comes back below
-    with no real answer; the frontend re-sends with context_source set."""
+    ask_ai_session_id: Ask-AI "thread" id (ChatGPT-style). Omitted/None on the
+    first message of a new thread — Layer 5 mints one, returned below so the
+    frontend can send it back on the next question in that thread. Threads
+    are fully independent of each other (no cross-thread memory).
+
+    live_context: optional. The current call's live transcript/latest
+    suggestion/customer profile, built by the frontend's "Include Current
+    Call Context" toggle — appended to the prompt for THIS question only,
+    never persisted into the thread's own memory.
+
+    confirm_email / confirmed_answer: pass-through for resolving an
+    email-send confirmation — see rag_pipeline/api.py. When the question is
+    detected as an email-send request, needs_email_confirmation=True comes
+    back below with pending_email={to, subject} and the drafted answer; the
+    frontend re-sends with confirm_email=True + confirmed_answer=<that answer>
+    to actually dispatch it. Nothing is ever sent unless confirmed."""
     question = (payload.get("question") or "").strip()
-    session_id = payload.get("session_id") or "ask"
-    advanced_filter = bool(payload.get("advanced_filter", False))
+    agent_id = (payload.get("agent_id") or "").strip()
     ask_ai_session_id = payload.get("ask_ai_session_id")
-    context_source = payload.get("context_source")
+    live_context = payload.get("live_context")
+    confirm_email = bool(payload.get("confirm_email", False))
+    confirmed_answer = payload.get("confirmed_answer")
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
     if _layer5_client is None:
         raise HTTPException(status_code=503, detail="RAG service not available")
     try:
         resp = await _layer5_client.query(
             query=question,
-            session_id=session_id,
-            customer_id=session_id,
-            advanced_filter=advanced_filter,
+            advanced_filter=True,
+            agent_id=agent_id,
             ask_ai_session_id=ask_ai_session_id,
-            context_source=context_source,
+            live_context=live_context,
+            confirm_email=confirm_email,
+            confirmed_answer=confirmed_answer,
         )
         return {
             "answer": resp.answer,
             "ask_ai_session_id": resp.ask_ai_session_id,
-            "needs_clarification": resp.needs_clarification,
-            "clarification_options": resp.clarification_options,
+            "emailed_to": resp.emailed_to,
+            "needs_email_confirmation": resp.needs_email_confirmation,
+            "pending_email": resp.pending_email,
         }
     except Exception as e:
         logger.error(f"/ask failed: {e}")
@@ -610,30 +671,46 @@ async def profile(session_id: str = Query(...)):
 
 
 @app.get("/ask-ai/sessions")
-async def ask_ai_sessions(session_id: str = Query(...)):
-    """Proxies Layer 5's GET /ask-ai/sessions — lists this call's Ask-AI
-    threads (most-recent-first) for the frontend's thread switcher. No CRM,
-    so customer_id=session_id, same convention as /ask and /profile."""
+async def ask_ai_sessions(agent_id: str = Query(...)):
+    """Proxies Layer 5's GET /ask-ai/sessions — lists this agent's Ask-AI
+    threads (most-recent-first) for the frontend's thread switcher. Every
+    thread that agent has ever created, across every call/session — Ask-AI
+    is owned by agent_id, not by any call."""
     if _layer5_client is None:
         raise HTTPException(status_code=503, detail="RAG service not available")
     try:
-        return await _layer5_client.list_ask_ai_sessions(customer_id=session_id)
+        return await _layer5_client.list_ask_ai_sessions(agent_id=agent_id)
     except Exception as e:
         logger.error(f"/ask-ai/sessions failed: {e}")
         raise HTTPException(status_code=502, detail=f"Ask-AI sessions fetch failed: {e}")
 
 
 @app.get("/ask-ai/thread")
-async def ask_ai_thread(session_id: str = Query(...), ask_ai_session_id: str = Query(...)):
+async def ask_ai_thread(agent_id: str = Query(...), ask_ai_session_id: str = Query(...)):
     """Proxies Layer 5's GET /ask-ai/thread — full history of one Ask-AI
     thread, for reopening it in the UI."""
     if _layer5_client is None:
         raise HTTPException(status_code=503, detail="RAG service not available")
     try:
-        return await _layer5_client.get_ask_ai_thread(customer_id=session_id, ask_ai_session_id=ask_ai_session_id)
+        return await _layer5_client.get_ask_ai_thread(agent_id=agent_id, ask_ai_session_id=ask_ai_session_id)
     except Exception as e:
         logger.error(f"/ask-ai/thread failed: {e}")
         raise HTTPException(status_code=502, detail=f"Ask-AI thread fetch failed: {e}")
+
+
+@app.delete("/ask-ai/thread")
+async def delete_ask_ai_thread(agent_id: str = Query(...), ask_ai_session_id: str = Query(...)):
+    """Proxies Layer 5's DELETE /ask-ai/thread — permanently deletes one
+    Ask-AI thread. Scoped to agent_id, so an agent can only delete their own
+    threads."""
+    if _layer5_client is None:
+        raise HTTPException(status_code=503, detail="RAG service not available")
+    try:
+        await _layer5_client.delete_ask_ai_thread(agent_id=agent_id, ask_ai_session_id=ask_ai_session_id)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"DELETE /ask-ai/thread failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Ask-AI thread delete failed: {e}")
 
 
 def _send_gmail(to: str, subject: str, body: str) -> None:
@@ -784,6 +861,8 @@ async def health():
         "trigger_mode": _runtime_trigger_mode,
         "router_available": _router_llm is not None,
         "router_model": getattr(_router_llm, "model", None),
+        "router_fallback_llm_available": _router_fallback_llm is not None,
+        "router_fallback_llm_model": getattr(_router_fallback_llm, "model", None),
     }
 
 

@@ -1,40 +1,56 @@
 """
 api.py — FastAPI wrapper around the RAG pipeline (main.py).
 
+Two entirely independent flows share this one /query endpoint, distinguished
+by advanced_filter:
+
+  advanced_filter=False -> the AI Copilot's own auto-triggered suggestions
+  during a live call. Call-scoped via RuntimeHistory (session_id + customer_id
+  — today always both set to the call's session id, no separate customer
+  identity — see auido_capture). Context = recent turns + semantically
+  relevant history/summaries for THIS call + insurance docs. See
+  _retrieve_context().
+
+  advanced_filter=True -> Ask-AI. Owned entirely by agent_id (the logged-in
+  sales agent), NOT by any call/session — an agent can use Ask-AI with no
+  call active at all, exactly like a standalone chatbot. Threads
+  (ask_ai_session_id) are independent of each other (no cross-thread memory,
+  ChatGPT-"New Chat"-style) and persist permanently per agent_id in
+  chat_bot_ask_ai (ask_ai_store.py) — reopening one later shows its full
+  history. Context = insurance docs + this thread's own chat_bot_ask_ai
+  memory + a live web search when the query needs it (classify_web_search).
+  Never touches RuntimeHistory's session-scoped recent_turns/history/summary,
+  and never calls history.add() — Ask-AI's only persisted state is
+  {query, answer} in its own thread. See _thread_context().
+
+  Optional live_context: built by the CALLER (frontend, from its own live
+  transcript/suggestion/profile state — see the "Include Current Call
+  Context" toggle) and appended to the prompt for that ONE request only. Never
+  written to chat_bot_ask_ai or anywhere else — the thread's permanent memory
+  never includes it.
+
 POST /query
-  body:   {query, session_id, customer_id, stream, advanced_filter, ask_ai_session_id}
+  body:   {query, stream, advanced_filter, agent_id, ask_ai_session_id,
+           live_context, session_id, customer_id}
+  session_id/customer_id only matter (and are required) when
+  advanced_filter=False. agent_id is required when advanced_filter=True.
   stream=False -> single JSON: {answer, retrieval_time_s, llm_time_s, total_time_s, ask_ai_session_id}
   stream=True  -> text/event-stream: one "data:" event per token as it
                   arrives from Groq, then a final "event: done" carrying the
                   full answer + timing breakdown + ask_ai_session_id.
-
-  advanced_filter=True turns on chat_bot_ask_ai: recent + semantically relevant
-  past Q&A from an Ask-AI "thread" (ask_ai_session_id, ChatGPT-style — see
-  ask_ai_store.py), plus a live web search when the query is classified as
-  off-domain/general/incomplete (query_understanding.classify_web_search).
   Omit ask_ai_session_id to start a new thread; the server mints one and
   returns it for the client to reuse on the next message in that thread.
 
-  Ambiguous-reference clarification (advanced_filter only): if the query reads
-  like "correct this suggestion"/"fix that point" (ambiguous_reference.py) and
-  context_source isn't set yet, the response comes back immediately with
-  needs_clarification=true + clarification_options instead of an answer — no
-  LLM call is made. The client re-sends the SAME query with context_source set
-  to the user's pick to get the real answer:
-    "suggestion_card" -> context = this call's session history + summaries only
-                          (RuntimeHistory; no docs, no chat_bot_ask_ai, no web search)
-    "current_thread"  -> context = this Ask-AI thread's own history only
-                          (chat_bot_ask_ai; no RuntimeHistory, no docs, no web search)
-  context_source is ignored (has no effect) when the query wasn't flagged as
-  ambiguous — the normal multi-source advanced_filter context is used instead.
+GET /ask-ai/sessions?agent_id=...
+  Lists this agent's Ask-AI threads (most-recent-first) for a session switcher.
 
-GET /ask-ai/sessions?customer_id=...
-  Lists a customer's Ask-AI threads (most-recent-first) for a session switcher.
-
-GET /ask-ai/thread?customer_id=...&ask_ai_session_id=...
+GET /ask-ai/thread?agent_id=...&ask_ai_session_id=...
   Full {query, answer, timestamp} history of one Ask-AI thread, chronological —
   for reopening a past thread and replaying it in the UI (see /ask-ai/sessions
   for the list of thread ids to choose from).
+
+DELETE /ask-ai/thread?agent_id=...&ask_ai_session_id=...
+  Permanently deletes one Ask-AI thread. Idempotent.
 
 GET /profile?session_id=...&customer_id=...
   Builds a customer profile (name, age, profession, location, policy_product,
@@ -44,16 +60,25 @@ GET /profile?session_id=...&customer_id=...
 
 POST /session/{session_id}/end?customer_id=...
   Called when a call ends: summarizes any remaining runtime history for this
-  (session_id, customer_id) into the persistent summary DB and closes its
-  Qdrant clients, then evicts it from the process-wide RuntimeHistory cache.
-  No-ops successfully (not an error) if that session was never actually used.
+  (session_id, customer_id) into the persistent summary DB, then evicts it
+  from the process-wide RuntimeHistory cache (the underlying Qdrant clients
+  are NOT closed here — see below). No-ops successfully (not an error) if
+  that session was never actually used. Unrelated to Ask-AI/agent_id.
 
-One RuntimeHistory per (session_id, customer_id), created on first use and
-cached for the life of the process — RuntimeHistory's on-disk Qdrant client
-(CLEAR_RUNTIME_HISTORY=False, see constants.py) holds a directory lock, so it
-must stay open rather than being recreated per request. AskAIStore (chat_bot_ask_ai)
-is a single process-wide instance instead, since its threads are scoped by
-customer_id + ask_ai_session_id, not by call session_id.
+One RuntimeHistory per (session_id, customer_id) — or per (agent_id, agent_id)
+for the Ask-AI docs-only lookup, see _thread_context() — created on first use
+and cached for the life of the process for the session-scoped bookkeeping
+(_id_counter, caches) — but its history/summary/docs Qdrant clients are
+process-wide singletons shared by every RuntimeHistory instance (see
+history_pipeline.RuntimeHistory._get_shared_clients), because they all point
+at the same on-disk storage folders (rows are scoped by a payload filter, not
+by separate storage) and Qdrant's embedded mode only allows one open handle
+per folder — two sessions each opening their own client to the same folder
+used to crash with "already accessed by another instance of Qdrant client"
+the moment a second session was alive concurrently. AskAIStore
+(chat_bot_ask_ai) was already a single process-wide instance for the same
+underlying reason, since its threads are scoped by agent_id + ask_ai_session_id,
+not by call session_id.
 
 Run:
     cd rag_pipeline/src
@@ -71,7 +96,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Tuple
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -79,15 +104,19 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from history.history_pipeline import RuntimeHistory, _embed, _get_model
-from main import parallel_search, build_context, call_llm, stream_llm_chunks, rerank
+from data_dump.embedder import _get_model as _get_docs_embedding_model
+from main import parallel_search, build_context, call_llm, stream_llm_chunks
 from query_understanding import classify_web_search
 from web_search_call import web_search_answer
 from ask_ai_store import AskAIStore
 from profile_extractor import extract_profile
 from email_trigger import detect_email_request
 from email_sending_test import send_email
-from ambiguous_reference import is_ambiguous_reference
-from constants import DEBUG, MAX_HISTORY_CHUNKS, EVICT_COUNT
+from constants import DEBUG, MAX_HISTORY_CHUNKS, EVICT_COUNT, DOCS_SEARCH_K
+# ambiguous_reference.is_ambiguous_reference is deliberately NOT imported —
+# Ask-AI no longer has any ambiguity to resolve (it never touches RuntimeHistory
+# automatically; live call context is an explicit toggle, not inferred from
+# wording). Kept in the repo, unused, in case it's needed again later.
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rag_api")
@@ -99,7 +128,7 @@ _histories_lock = Lock()
 
 # chat_bot_ask_ai (advanced_filter mode): one store for the whole process,
 # NOT keyed by call session_id — see ask_ai_store.py for why threads are
-# scoped to (customer_id, ask_ai_session_id) instead.
+# scoped to (agent_id, ask_ai_session_id) instead.
 _ask_ai_store: Optional[AskAIStore] = None
 
 # Must match build_context()'s own top_k default (main.py) — kept as an
@@ -133,9 +162,10 @@ ADVANCED_SYSTEM_PROMPT = (
 # abc@gmail.com") reads to the LLM as an instruction it must fulfill itself,
 # and since it has no email tool it responds with a capability disclaimer
 # ("I can't send emails") instead of the actual informational answer — even
-# though _send_answer_email() already handles the send afterward, entirely
-# independent of what the LLM says. This note tells the LLM that instruction
-# is handled automatically, so it should just answer the real question.
+# though the actual dispatch (once the agent confirms — see
+# needs_email_confirmation/confirm_email) is handled entirely independently of
+# what the LLM says. This note tells the LLM that instruction is handled
+# elsewhere, so it should just answer the real question.
 EMAIL_HANDLING_NOTE = (
     "\n\nNote: this message also asks to email/send the answer somewhere. "
     "That delivery is handled automatically by the system after you respond — "
@@ -168,10 +198,13 @@ def _log_chunks(label: str, chunks: List[Tuple[str, float]], full: bool = False)
 @app.on_event("startup")
 async def startup():
     global _ask_ai_store
-    # Force the SentenceTransformer to load now (it's normally lazy, on first
-    # _embed() call) so the app doesn't report ready until it's actually
-    # ready to serve a query at full speed.
-    await asyncio.to_thread(_get_model)
+    # Force both embedding models to load now (each is normally lazy, on
+    # first use) so the app doesn't report ready until it's actually ready to
+    # serve a query at full speed — and so a first-ever cold-start model
+    # download (BGE-M3 is ~3GB) shows up clearly in the startup logs instead
+    # of silently blocking a live agent's first Ask-AI question.
+    await asyncio.to_thread(_get_model)                # gte-large — runtime_history/session_summaries
+    await asyncio.to_thread(_get_docs_embedding_model)  # BGE-M3 — insurance docs (search_docs_scored)
     _ask_ai_store = await asyncio.to_thread(AskAIStore)
 
 
@@ -188,41 +221,58 @@ def _get_history(session_id: str, customer_id: str) -> RuntimeHistory:
 @app.on_event("shutdown")
 async def shutdown():
     with _histories_lock:
-        for history in _histories.values():
-            history.close()
         _histories.clear()
+    # history/summary/docs Qdrant clients are process-wide singletons shared
+    # by every session (see RuntimeHistory._get_shared_clients) — close them
+    # once here, not per-session (individual RuntimeHistory.close() is a no-op).
+    RuntimeHistory.close_shared_clients()
     if _ask_ai_store is not None:
         _ask_ai_store.close()
 
 
 class QueryRequest(BaseModel):
     query: str
-    session_id: str
-    customer_id: str
     stream: bool = False
+    # Required when advanced_filter=False (the AI Copilot's own call-scoped
+    # suggestions), ignored otherwise. Today always both set to the call's
+    # session id by auido_capture (no separate customer identity) — see
+    # module docstring.
+    session_id: Optional[str] = None
+    customer_id: Optional[str] = None
     # Optional explicit docs metadata filter. When any is set, it overrides the
     # LLM-derived query filter (search_docs_scored's auto path is skipped).
     plan_name: Optional[str] = None
     doc_type: Optional[str] = None
     product_type: Optional[str] = None
     tenant_id: Optional[str] = None
-    # When True: adds chat_bot_ask_ai (recent + semantically relevant past Q&A)
-    # to the context, triggers a live web search for non-insurance/incomplete
-    # queries, and logs this {query, answer} pair to chat_bot_ask_ai. Default
-    # False preserves the exact existing behavior.
+    # When True: this is Ask-AI, not the AI Copilot — see module docstring.
+    # agent_id becomes required; session_id/customer_id are ignored.
     advanced_filter: bool = False
+    # Required when advanced_filter=True. The logged-in sales agent's stable
+    # identity (from auido_capture's /auth/login) — Ask-AI threads belong to
+    # this, never to any call/session. See module docstring.
+    agent_id: Optional[str] = None
     # Ask-AI "thread" id (only meaningful when advanced_filter=True) — like a
     # ChatGPT conversation id. Omit on the first message of a new thread; the
     # server mints one and returns it in QueryResponse so the client can pass
     # it back on subsequent messages in the same thread. Pass a previously
     # returned id to continue that thread, or a different one to switch threads.
+    # Threads are fully independent of each other — no cross-thread memory.
     ask_ai_session_id: Optional[str] = None
-    # Resolves an ambiguous-reference clarification (see module docstring) —
-    # "suggestion_card" or "current_thread". Only has an effect when the query
-    # is actually flagged as ambiguous; ignored otherwise. Leave unset on a
-    # fresh query — set it only when re-sending after the user picked an
-    # option in response to needs_clarification=true.
-    context_source: Optional[str] = None
+    # Optional, advanced_filter=True only: the current call's live transcript/
+    # latest suggestion/customer profile, built by the CALLER (frontend's
+    # "Include Current Call Context" toggle) and appended to the prompt for
+    # THIS request only. Never persisted — chat_bot_ask_ai only ever saves
+    # {query, answer}, never this.
+    live_context: Optional[str] = None
+    # Resolves an email-send confirmation (see needs_email_confirmation below).
+    # Leave False on a fresh query. Set True + confirmed_answer (the exact
+    # answer text the agent reviewed and approved) only when re-sending after
+    # the agent confirmed — this sends verbatim rather than re-running
+    # retrieval/LLM a second time, so what gets emailed always matches exactly
+    # what the agent saw and approved.
+    confirm_email: bool = False
+    confirmed_answer: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
@@ -233,19 +283,19 @@ class QueryResponse(BaseModel):
     # Echoed/minted only when advanced_filter=True — persist this and send it
     # back as ask_ai_session_id on the next call to stay in the same thread.
     ask_ai_session_id: Optional[str] = None
-    # Set only when advanced_filter=True and the query was detected as an
-    # email-send request (email_trigger.detect_email_request) — the recipient
-    # the answer was dispatched to. Fire-and-forget: this means "queued", not
-    # "confirmed delivered" — actual success/failure only appears in server
-    # logs ([advanced:email] sent/failed), never as an API error.
+    # Set only once the email has actually been dispatched (confirm_email=True
+    # round-trip) — the recipient the answer was sent to. Fire-and-forget:
+    # this means "queued", not "confirmed delivered" — actual success/failure
+    # only appears in server logs ([advanced:email] sent/failed), never as an
+    # API error.
     emailed_to: Optional[str] = None
-    # True when the query was flagged as an ambiguous reference (see module
-    # docstring) and context_source wasn't already given — answer is "" in
-    # this case; no LLM call was made. Re-send the same query with
-    # context_source set to one of clarification_options' values to get the
-    # real answer.
-    needs_clarification: bool = False
-    clarification_options: Optional[List[dict]] = None
+    # True when the query was detected as an email-send request
+    # (email_trigger.detect_email_request) but hasn't been sent yet — answer
+    # still holds the drafted text for the agent to review. Re-send the same
+    # query with confirm_email=True + confirmed_answer=<this answer> to
+    # actually dispatch it, or just don't — nothing is sent unless confirmed.
+    needs_email_confirmation: bool = False
+    pending_email: Optional[dict] = None
 
 
 def _build_explicit_filter(request: "QueryRequest"):
@@ -258,15 +308,12 @@ def _build_explicit_filter(request: "QueryRequest"):
     return Filter(must=conds) if conds else None
 
 
-def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None, advanced: bool = False,
-                      customer_id: str = None, ask_ai_session_id: str = None) -> str:
-    """Embed + search + rerank + build_context — same steps as main.py's main(), synchronous/blocking.
-
-    advanced=True additionally appends chat_bot_ask_ai context (recent + semantically
-    relevant past Q&A for this ask_ai_session_id thread) and, when the query is
-    classified as web-search-worthy (non-insurance / general / incomplete), live
-    web search results.
-    """
+def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None) -> str:
+    """Embed + search + rerank + build_context — same steps as main.py's main(),
+    synchronous/blocking. Used ONLY for the AI Copilot's own call-scoped
+    suggestions (advanced_filter=False) — Ask-AI (advanced_filter=True) uses
+    _thread_context() instead and never reaches this function; see module
+    docstring."""
     query_vec = _embed([query])[0]
     recent_turns = history.get_recent_history(n=5)
     history_ranked, summary_ranked, docs_ranked = parallel_search(query, query_vec, history, doc_filter=doc_filter)
@@ -293,90 +340,69 @@ def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None, adva
         f"total_chunks_to_llm={len(recent_turns) + used_history + used_summary + used_docs}"
     )
 
-    if advanced:
-        context += _advanced_context(query, query_vec, customer_id, ask_ai_session_id)
-
     return context
 
 
-def _advanced_context(query: str, query_vec: list, customer_id: str, ask_ai_session_id: str) -> str:
-    """chat_bot_ask_ai (recent + relevant past Q&A for this thread) + a live web
-    search when the query is classified as web-search-worthy. Appended to the
-    base context string."""
+def _thread_context(query: str, history: RuntimeHistory, agent_id: str, ask_ai_session_id: str,
+                     doc_filter=None, live_context: Optional[str] = None) -> str:
+    """The ONLY context builder for Ask-AI (advanced_filter=True): insurance
+    product docs (global knowledge, not session-scoped) + this thread's own
+    chat_bot_ask_ai memory (recent + semantically relevant past Q&A, scoped by
+    agent_id + ask_ai_session_id) + a live web search when the query needs it.
+
+    `history` is a RuntimeHistory instance used ONLY for its shared docs_client
+    (search_docs_scored) — its session-scoped recent_turns/history/summary
+    methods are deliberately never called here, and .add() is never called on
+    it for Ask-AI turns. This is what makes Ask-AI fully decoupled from any
+    call/session: the only identity that matters is agent_id.
+
+    live_context (optional): the current call's live transcript/suggestion/
+    profile, built by the caller from its own live state (see the frontend's
+    "Include Current Call Context" toggle) — appended as a clearly-labeled
+    TEMPORARY section for this one request only. Never saved to chat_bot_ask_ai
+    or anywhere else.
+    """
+    query_vec = _embed([query])[0]
+
+    docs_results = history.search_docs_scored(query, DOCS_SEARCH_K, doc_filter)
+    docs_ranked = [(text, score) for text, score, _ in docs_results]
+    _log_chunks("docs", docs_ranked, full=DEBUG)
+    context = build_context([], [], [], docs_ranked, top_k=CONTEXT_TOP_K)
+
     extra = []
 
-    recent_qas = _ask_ai_store.get_recent(customer_id, ask_ai_session_id, n=5)
-    logger.info(f"[advanced:chat_ask_ai_recent] thread={ask_ai_session_id} {len(recent_qas)} turn(s)")
+    recent_qas = _ask_ai_store.get_recent(agent_id, ask_ai_session_id, n=5)
+    logger.info(f"[thread] agent={agent_id} thread={ask_ai_session_id} recent={len(recent_qas)} turn(s)")
     if recent_qas:
-        extra.append("--- Recent chat_bot_ask_ai turns (chronological) ---")
+        extra.append("--- Recent turns in this Ask-AI thread (chronological) ---")
         extra.extend(f"  {qa}" for qa in recent_qas)
 
-    qa_ranked = _ask_ai_store.search_relevant(customer_id, ask_ai_session_id, query_vec, k=CONTEXT_TOP_K)
-    _log_chunks("chat_ask_ai_relevant", [(text, score) for text, score, _ts in qa_ranked])
+    qa_ranked = _ask_ai_store.search_relevant(agent_id, ask_ai_session_id, query_vec, k=CONTEXT_TOP_K)
+    _log_chunks("thread_relevant", [(text, score) for text, score, _ts in qa_ranked])
     if qa_ranked:
-        extra.append("--- Relevant past Q&A (chat_bot_ask_ai) ---")
+        extra.append("--- Semantically relevant past turns in this thread ---")
         extra.extend(f"  • {text}" for text, _score, _ts in qa_ranked)
 
     web_triggered = classify_web_search(query)
-    logger.info(f"[advanced:web_search_trigger] {web_triggered}")
+    logger.info(f"[thread:web_search_trigger] {web_triggered}")
     if web_triggered:
         try:
             web_text = web_search_answer(query)
         except Exception as e:
-            logger.warning(f"[advanced:web_search] failed: {e}")
+            logger.warning(f"[thread:web_search] failed: {e}")
             web_text = ""
         if web_text:
             extra.append("--- Live web search results ---")
             extra.append(f"  {web_text}")
 
-    return ("\n" + "\n".join(extra)) if extra else ""
+    if live_context:
+        extra.append("--- Live call context (temporary — this request only, not saved) ---")
+        extra.append(live_context)
 
+    if extra:
+        context += ("\n" if context else "") + "\n".join(extra)
 
-CLARIFICATION_OPTIONS = [
-    {"value": "suggestion_card", "label": "The suggestion card"},
-    {"value": "current_thread", "label": "This chat thread"},
-]
-
-
-def _suggestion_card_context(query: str, history: RuntimeHistory) -> str:
-    """Narrow context for the 'suggestion_card' disambiguation choice: this
-    call's own recent turns + session summaries only (RuntimeHistory's two
-    collections) — no insurance docs, no chat_bot_ask_ai, no web search.
-    Deliberately calls history's own scored-search methods directly (not
-    parallel_search) to skip the docs/BGE-M3 hybrid search entirely, since
-    it's out of scope here and would otherwise waste that retrieval work."""
-    query_vec = _embed([query])[0]
-    recent_turns = history.get_recent_history(n=5)
-    history_ranked = rerank(history.search_history_scored(query_vec, k=4))
-    summary_ranked = rerank(history.search_summary_scored(query_vec, k=4))
-
-    logger.info(f"[clarify:suggestion_card] recent_turns={len(recent_turns)}")
-    _log_chunks("history", history_ranked)
-    _log_chunks("summary", summary_ranked)
-
-    return build_context(recent_turns, history_ranked, summary_ranked, [], top_k=CONTEXT_TOP_K)
-
-
-def _current_thread_context(customer_id: str, ask_ai_session_id: str, query: str) -> str:
-    """Narrow context for the 'current_thread' disambiguation choice: only
-    this Ask-AI thread's own history (chat_bot_ask_ai) — no RuntimeHistory, no
-    docs, no web search."""
-    query_vec = _embed([query])[0]
-    parts = []
-
-    recent_qas = _ask_ai_store.get_recent(customer_id, ask_ai_session_id, n=5)
-    logger.info(f"[clarify:current_thread] thread={ask_ai_session_id} recent={len(recent_qas)}")
-    if recent_qas:
-        parts.append("--- Recent chat_bot_ask_ai turns (chronological) ---")
-        parts.extend(f"  {qa}" for qa in recent_qas)
-
-    qa_ranked = _ask_ai_store.search_relevant(customer_id, ask_ai_session_id, query_vec, k=CONTEXT_TOP_K)
-    _log_chunks("chat_ask_ai_relevant", [(text, score) for text, score, _ts in qa_ranked])
-    if qa_ranked:
-        parts.append("--- Relevant past Q&A (chat_bot_ask_ai) ---")
-        parts.extend(f"  • {text}" for text, _score, _ts in qa_ranked)
-
-    return "\n".join(parts)
+    return context
 
 
 EMAIL_SUBJECT_QUERY_CHARS = 60
@@ -411,45 +437,57 @@ def _send_answer_email(recipient: str, query: str, answer: str) -> None:
 
 @app.post("/query")
 async def query(request: QueryRequest):
-    history = _get_history(request.session_id, request.customer_id)
-
     # A new thread id is minted here (not left to the client) so the first
     # message of an Ask-AI conversation doesn't need one pre-generated —
     # mirrors ChatGPT starting a new conversation on the first message.
     ask_ai_session_id = None
     if request.advanced_filter:
+        if not request.agent_id:
+            raise HTTPException(status_code=400, detail="agent_id is required when advanced_filter=True")
         ask_ai_session_id = request.ask_ai_session_id or str(uuid.uuid4())
 
-    # Ambiguous-reference check: only on a query's FIRST pass (context_source
-    # not already set — a resend after the user picked an option skips this
-    # entirely, even if the resent text still matches the pattern). No LLM
-    # call, no retrieval — just tell the client which context sources to
-    # disambiguate between.
-    if (request.advanced_filter and request.context_source is None
-            and is_ambiguous_reference(request.query)):
-        logger.info(f"[clarify] ambiguous reference detected: {request.query!r}")
+    # Email confirmation round-trip: the agent already reviewed confirmed_answer
+    # (returned as this same query's answer on the first pass, with
+    # needs_email_confirmation=True) and approved sending it. Short-circuits
+    # BEFORE retrieval/LLM — sends verbatim rather than regenerating the answer
+    # a second time, which could otherwise drift from what was actually shown
+    # to and approved by the agent. No chat_bot_ask_ai save here either: the
+    # first pass already saved this {query, answer} pair.
+    if request.advanced_filter and request.confirm_email and request.confirmed_answer:
+        email_recipient = detect_email_request(request.query)
+        if email_recipient:
+            _send_answer_email(email_recipient, request.query, request.confirmed_answer)
         return QueryResponse(
-            answer="",
+            answer=request.confirmed_answer,
             retrieval_time_s=0.0, llm_time_s=0.0, total_time_s=0.0,
             ask_ai_session_id=ask_ai_session_id,
-            needs_clarification=True,
-            clarification_options=CLARIFICATION_OPTIONS,
+            emailed_to=email_recipient,
         )
 
     t_start = time.perf_counter()
     doc_filter = _build_explicit_filter(request)
 
-    if request.context_source == "suggestion_card":
-        context = await asyncio.to_thread(_suggestion_card_context, request.query, history)
-    elif request.context_source == "current_thread":
+    # Ask-AI (advanced_filter=True) is owned by agent_id alone, fully decoupled
+    # from any call/session — see module docstring. The AI Copilot's own
+    # auto-triggered suggestions (advanced_filter=False) stay call-scoped via
+    # RuntimeHistory, unchanged.
+    if request.advanced_filter:
+        # RuntimeHistory here is used ONLY for its shared docs_client (product
+        # knowledge search, global and session-independent) — never its
+        # session-scoped recent_turns/history/summary methods, and .add() is
+        # never called on it for Ask-AI turns.
+        history = _get_history(request.agent_id, request.agent_id)
         context = await asyncio.to_thread(
-            _current_thread_context, request.customer_id, ask_ai_session_id, request.query
+            _thread_context, request.query, history, request.agent_id, ask_ai_session_id,
+            doc_filter, request.live_context,
         )
     else:
-        context = await asyncio.to_thread(
-            _retrieve_context, request.query, history, doc_filter, request.advanced_filter,
-            request.customer_id, ask_ai_session_id,
-        )
+        if not request.session_id or not request.customer_id:
+            raise HTTPException(
+                status_code=400, detail="session_id and customer_id are required when advanced_filter=False"
+            )
+        history = _get_history(request.session_id, request.customer_id)
+        context = await asyncio.to_thread(_retrieve_context, request.query, history, doc_filter)
     t_retrieval = time.perf_counter()
 
     # Detected BEFORE the LLM call (not after, as originally) so the system
@@ -464,24 +502,29 @@ async def query(request: QueryRequest):
 
     if request.stream:
         return StreamingResponse(
-            _stream_answer(request.query, history, context, t_start, t_retrieval,
-                           system_prompt, request.advanced_filter, request.customer_id, ask_ai_session_id,
-                           email_recipient),
+            _stream_answer(request.query, context, t_start, t_retrieval,
+                           system_prompt, request.advanced_filter, history,
+                           request.agent_id, ask_ai_session_id, email_recipient),
             media_type="text/event-stream",
         )
 
     answer = await asyncio.to_thread(call_llm, request.query, context, system_prompt)
     t_end = time.perf_counter()
 
-    await asyncio.to_thread(history.add, "user", request.query)
-    await asyncio.to_thread(history.add, "assistant", answer)
+    if not request.advanced_filter:
+        await asyncio.to_thread(history.add, "user", request.query)
+        await asyncio.to_thread(history.add, "assistant", answer)
 
-    emailed_to = None
+    needs_email_confirmation = False
+    pending_email = None
     if request.advanced_filter:
-        await asyncio.to_thread(_ask_ai_store.save, request.customer_id, ask_ai_session_id, request.query, answer)
+        await asyncio.to_thread(_ask_ai_store.save, request.agent_id, ask_ai_session_id, request.query, answer)
         if email_recipient:
-            _send_answer_email(email_recipient, request.query, answer)
-            emailed_to = email_recipient
+            # Don't send yet — the agent needs to confirm first (see
+            # QueryRequest.confirm_email). answer already holds the drafted
+            # text for them to review.
+            needs_email_confirmation = True
+            pending_email = {"to": email_recipient, "subject": _derive_email_subject(request.query)}
 
     return QueryResponse(
         answer=answer,
@@ -489,13 +532,14 @@ async def query(request: QueryRequest):
         llm_time_s=round(t_end - t_retrieval, 3),
         total_time_s=round(t_end - t_start, 3),
         ask_ai_session_id=ask_ai_session_id,
-        emailed_to=emailed_to,
+        needs_email_confirmation=needs_email_confirmation,
+        pending_email=pending_email,
     )
 
 
-def _stream_answer(query: str, history: RuntimeHistory, context: str, t_start: float, t_retrieval: float,
+def _stream_answer(query: str, context: str, t_start: float, t_retrieval: float,
                    system_prompt: str = None, advanced_filter: bool = False,
-                   customer_id: str = None, ask_ai_session_id: str = None,
+                   history: RuntimeHistory = None, agent_id: str = None, ask_ai_session_id: str = None,
                    email_recipient: str = None):
     """Sync generator (Starlette runs it in a threadpool) — yields SSE token events, then a final done event."""
     parts = []
@@ -506,15 +550,20 @@ def _stream_answer(query: str, history: RuntimeHistory, context: str, t_start: f
     answer = "".join(parts)
     t_end = time.perf_counter()
 
-    history.add("user", query)
-    history.add("assistant", answer)
+    if not advanced_filter and history is not None:
+        history.add("user", query)
+        history.add("assistant", answer)
 
-    emailed_to = None
+    needs_email_confirmation = False
+    pending_email = None
     if advanced_filter:
-        _ask_ai_store.save(customer_id, ask_ai_session_id, query, answer)
+        _ask_ai_store.save(agent_id, ask_ai_session_id, query, answer)
         if email_recipient:
-            _send_answer_email(email_recipient, query, answer)
-            emailed_to = email_recipient
+            # Don't send yet — mirrors the non-streaming /query path: the
+            # agent must resend with confirm_email=True + confirmed_answer to
+            # actually dispatch it.
+            needs_email_confirmation = True
+            pending_email = {"to": email_recipient, "subject": _derive_email_subject(query)}
 
     done_payload = {
         "answer": answer,
@@ -522,26 +571,37 @@ def _stream_answer(query: str, history: RuntimeHistory, context: str, t_start: f
         "llm_time_s": round(t_end - t_retrieval, 3),
         "total_time_s": round(t_end - t_start, 3),
         "ask_ai_session_id": ask_ai_session_id,
-        "emailed_to": emailed_to,
+        "needs_email_confirmation": needs_email_confirmation,
+        "pending_email": pending_email,
     }
     yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
 
 @app.get("/ask-ai/sessions")
-async def ask_ai_sessions(customer_id: str):
-    """List this customer's Ask-AI threads (most-recent-first) — powers a
+async def ask_ai_sessions(agent_id: str):
+    """List this agent's Ask-AI threads (most-recent-first) — powers a
     ChatGPT-style session switcher in the frontend."""
-    sessions = await asyncio.to_thread(_ask_ai_store.list_sessions, customer_id)
-    return {"customer_id": customer_id, "sessions": sessions}
+    sessions = await asyncio.to_thread(_ask_ai_store.list_sessions, agent_id)
+    return {"agent_id": agent_id, "sessions": sessions}
 
 
 @app.get("/ask-ai/thread")
-async def ask_ai_thread(customer_id: str, ask_ai_session_id: str):
+async def ask_ai_thread(agent_id: str, ask_ai_session_id: str):
     """Full chronological {query, answer, timestamp} history of one Ask-AI
     thread — for reopening a thread picked from /ask-ai/sessions and replaying
     it in the UI."""
-    turns = await asyncio.to_thread(_ask_ai_store.get_thread, customer_id, ask_ai_session_id)
-    return {"customer_id": customer_id, "ask_ai_session_id": ask_ai_session_id, "turns": turns}
+    turns = await asyncio.to_thread(_ask_ai_store.get_thread, agent_id, ask_ai_session_id)
+    return {"agent_id": agent_id, "ask_ai_session_id": ask_ai_session_id, "turns": turns}
+
+
+@app.delete("/ask-ai/thread")
+async def delete_ask_ai_thread(agent_id: str, ask_ai_session_id: str):
+    """Permanently deletes one Ask-AI thread. Scoped by BOTH agent_id and
+    ask_ai_session_id (see AskAIStore.delete_thread) so an agent can only ever
+    delete their own threads. Idempotent — deleting an already-gone/unknown
+    thread still returns ok=True rather than a 404."""
+    await asyncio.to_thread(_ask_ai_store.delete_thread, agent_id, ask_ai_session_id)
+    return {"ok": True, "agent_id": agent_id, "ask_ai_session_id": ask_ai_session_id}
 
 
 def _build_session_transcript(history: RuntimeHistory) -> str:
