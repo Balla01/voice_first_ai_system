@@ -1,0 +1,65 @@
+New Implementation
+*** **************
+DUMP DATA : main\src\run_pipeline.py
+==== ====
+
+main file => for complete flow
+main.py
+
+
+
+cd C:\projects\audio_transition_projects\voice_first_ai_system\main\src
+
+python run_data_dump.py          # PDF → chunks.json
+python run_pipeline.py           # PDF → embed → Qdrant
+python check_db.py               # inspect DB
+python delete_rows.py            # delete rows 0-24
+python history/test_history.py   # 10-query history test
+
+
+
+
+
+
+
+
+# faster-whisper (default, fastest on CPU)
+python app.py
+
+# faster-whisper with a different model size
+python app.py --backend faster_whisper --model base
+
+# openai-whisper (original)
+python app.py --backend whisper --model base
+
+=============================================
+python app_vosk.py --model models\vosk-model-small-en-us-0.15
+
+
+Latest Commands
+===============
+
+Backend (FastAPI, port 8000):
+cd "C:\projects\audio_transition_projects\voice_first_ai_system\backend\main\auido_capture"
+python -m uvicorn main:app --reload --port 8000
+
+
+Frontend (static file server, port 5500):
+cd "C:\projects\audio_transition_projects\voice_first_ai_system\frontend"
+python -m http.server 5500
+Then open http://localhost:5500 in Chrome.
+
+RAG:
+===
+cd rag_pipeline/src
+uvicorn api:app --reload --port 8001
+
+
+
+ C:\voice_assistant_project\venv\Scripts\python.exe C:\voice_assistant_project\rag_pipeline\rag_pipeline\src\run_pipeline.py    # ingest PDFs -> Qdrant (docs_data_vectors)
+C:\voice_assistant_project\venv\Scripts\python.exe C:\voice_assistant_project\rag_pipeline\rag_pipeline\src\check_db.py       # inspect summary/docs/history DBs
+C:\voice_assistant_project\venv\Scripts\python.exe C:\voice_assistant_project\rag_pipeline\rag_pipeline\src\main.py           # console RAG demo (10 canned queries)
+C:\voice_assistant_project\venv\Scripts\python.exe C:\voice_assistant_project\rag_pipeline\rag_pipeline\src\eval_pipeline.py  # batch benchmark over questions.json -> data\output\eval_results.csv
+
+cd C:\voice_assistant_project\rag_pipeline\rag_pipeline\src
+C:\voice_assistant_project\venv\Scripts\python.exe -m uvicorn api:app --reload --port 8001

@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply font-sans antialiased;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { width: 7px; height: 7px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-slate-600/40 rounded-full;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+  .glass-dark {
+    @apply bg-slate-900/50 backdrop-blur-xl border border-white/10;
+  }
+  .glass-light {
+    @apply bg-white/60 backdrop-blur-xl border border-white/60;
+  }
+}
+
+:root {
+  --tw-border-opacity: 1;
+}

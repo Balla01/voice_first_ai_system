@@ -1,0 +1,31 @@
+# Secrets — pass groq_api via `docker run -e` instead of baking .env in
+.env
+.env.*
+
+# Python cruft
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Local venvs (never copy a Windows venv into a Linux image)
+venv/
+.venv/
+env/
+
+# VCS / IDE / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Build/eval artifacts not needed to serve the API
+data_dump/output/
+*.parquet
+run.txt
+4.36.0
+requirements-freeze.txt
+
+# The image gets requirements.docker.txt; the loose lists aren't needed inside

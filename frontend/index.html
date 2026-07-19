@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>InsureAssist AI</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ============ Header ============ -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"></path>
+          <path d="M9 12l2 2 4-4"></path>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <div class="brand-title">InsureAssist AI</div>
+        <div class="brand-sub">Real-time assistant for your customer calls</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="call-id">Call ID <b id="callId">#—</b></span>
+      <span class="call-timer" id="callTimer">00:00</span>
+      <button id="themeToggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"></path>
+        </svg>
+      </button>
+      <button id="startCallBtn" class="start-call-btn">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v2a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3-8.6A2 2 0 014.1 2h2a2 2 0 012 1.7c.1.9.3 1.8.6 2.6a2 2 0 01-.4 2.1L7.1 9.6a16 16 0 006 6l1.2-1.2a2 2 0 012.1-.4c.8.3 1.7.5 2.6.6a2 2 0 011.7 2z"></path></svg>
+        Start call
+      </button>
+      <button id="endCallBtn" class="end-call-btn" disabled>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M22 16.9v2a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3"></path></svg>
+        End call
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ Control bar ============ -->
+  <div class="control-bar">
+    <div class="controls-left">
+      <button class="toggle-chip" id="micToggle" type="button">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10a7 7 0 0014 0M12 19v3"></path></svg>
+        <span>My mic</span>
+        <span class="switch" data-on="false"></span>
+      </button>
+      <button class="toggle-chip" id="sysToggle" type="button">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0116 0v2"></path><rect x="2.5" y="14" width="4" height="6" rx="1.5"></rect><rect x="17.5" y="14" width="4" height="6" rx="1.5"></rect></svg>
+        <span>Customer audio</span>
+        <span class="switch" data-on="false"></span>
+      </button>
+      <span class="dot-sep">•</span>
+      <button class="toggle-chip" id="bothToggle" type="button">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1"></path><path d="M14 11a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1"></path></svg>
+        <span>Listen to both</span>
+        <span class="switch" data-on="false"></span>
+      </button>
+    </div>
+    <div class="controls-right">
+      <span class="listen-status" id="listenStatus"><span class="status-dot"></span> Not listening</span>
+    </div>
+  </div>
+
+  <!-- ============ Board ============ -->
+  <main class="board">
+    <!-- Left: Live Conversation -->
+    <section class="panel conversation-panel">
+      <div class="panel-head"><h2>Live Conversation</h2></div>
+      <div class="milestones">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4M5 4h11l-2 3 2 3H5"></path></svg>
+        <span>Call milestones will appear here</span>
+      </div>
+      <div class="panel-body" id="conversation">
+        <div class="empty-state" id="convoEmpty">
+          <div class="empty-ico ico-blue">
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0116 0v2"></path><rect x="2.5" y="14" width="4" height="6" rx="1.5"></rect><rect x="17.5" y="14" width="4" height="6" rx="1.5"></rect></svg>
+          </div>
+          <div class="empty-title">Turn on your mic and customer audio</div>
+          <div class="empty-sub">The live conversation will appear here once both are on.</div>
+        </div>
+        <div class="transcript-list" id="transcript"></div>
+      </div>
+    </section>
+
+    <!-- Center: AI Copilot -->
+    <section class="panel copilot-panel">
+      <div class="panel-head">
+        <h2>
+          <span class="head-ico">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"></rect><path d="M12 8V4M9 14h.01M15 14h.01M2 13v2M22 13v2"></path></svg>
+          </span>
+          AI Copilot
+        </h2>
+        <p class="panel-sub">Understands what the customer needs, live</p>
+      </div>
+
+      <div class="intent-bar">
+        <span class="intent-label" id="intentLabel">No intent detected yet</span>
+        <span class="dot-sep">•</span>
+        <span class="intent-change">Change to:</span>
+        <select id="intentSelect" class="intent-select">
+          <option value="Policy Inquiry">Policy Inquiry</option>
+          <option value="Objection">Objection</option>
+          <option value="Premium Concern">Premium Concern</option>
+          <option value="Claim Question">Claim Question</option>
+          <option value="Exclusion Concern">Exclusion Concern</option>
+          <option value="Buying Signal">Buying Signal</option>
+        </select>
+        <button id="intentSend" class="btn-primary">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
+          Send
+        </button>
+      </div>
+
+      <div class="suggested-label">SUGGESTED ANSWER</div>
+      <div class="panel-body" id="suggestions">
+        <div class="empty-state" id="sugEmpty">
+          <div class="empty-ico ico-blue">
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"></rect><path d="M12 8V4M9 14h.01M15 14h.01M2 13v2M22 13v2"></path></svg>
+          </div>
+          <div class="empty-title">Suggestions will appear here</div>
+          <div class="empty-sub">Once the conversation starts, the copilot's answers show up in this feed.</div>
+        </div>
+        <div class="suggestion-list" id="suggestionList"></div>
+      </div>
+
+      <div class="copilot-footer">
+        <span class="ready-status" id="readyStatus">Ready</span>
+        <button id="replayBtn" class="btn-ghost" disabled>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"></path><path d="M3 3v5h5"></path></svg>
+          Replay this call
+        </button>
+      </div>
+    </section>
+
+    <!-- Right: Tabs -->
+    <section class="panel tabs-panel">
+      <div class="tabs">
+        <button class="tab" data-tab="policy"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path><path d="M14 2v6h6"></path></svg><span>Policy</span></button>
+        <button class="tab" data-tab="profile"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0116 0"></path></svg><span>Profile</span></button>
+        <button class="tab" data-tab="email"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg><span>Email</span></button>
+        <button class="tab active" data-tab="askai"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"></path></svg><span>Ask AI</span></button>
+      </div>
+      <div class="tab-body">
+        <div class="tab-pane" data-pane="policy">
+          <div class="empty-state small"><div class="empty-title">No policy loaded</div><div class="empty-sub">Policy details will show here once linked to a customer.</div></div>
+        </div>
+        <div class="tab-pane" data-pane="profile">
+          <div class="askai-head">
+            <span class="askai-head-title">Profile</span>
+            <button id="profileReload" class="icon-btn" title="Refresh profile" aria-label="Refresh profile">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.5 9a9 9 0 0114.5-3.4L23 10M1 14l5-.9A9 9 0 0020.5 15"></path></svg>
+            </button>
+          </div>
+          <div class="panel-body" id="profileBody">
+            <div class="empty-state small" id="profileEmpty">
+              <div class="empty-title">No customer profile</div>
+              <div class="empty-sub">Profile info appears here when a customer is identified.</div>
+            </div>
+            <div class="profile-fields" id="profileFields" style="display:none;"></div>
+          </div>
+        </div>
+        <div class="tab-pane" data-pane="email">
+          <div class="empty-state small"><div class="empty-title">No email drafted</div><div class="empty-sub">Use "Ask AI" to draft a follow-up, then it lands here.</div></div>
+        </div>
+        <div class="tab-pane active" data-pane="askai">
+          <div class="askai-head">
+            <div class="askai-head-left">
+              <span class="askai-head-title">Ask AI</span>
+              <span class="askai-thread-badge" id="askaiThreadBadge">New thread</span>
+            </div>
+            <div class="askai-head-right">
+              <select id="askaiThreadSelect" class="askai-thread-select" title="Switch Ask-AI thread" aria-label="Switch Ask-AI thread">
+                <option value="">New thread</option>
+              </select>
+              <button id="askaiNewThread" class="icon-btn" title="Start a new Ask-AI thread" aria-label="Start a new Ask-AI thread">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+              </button>
+            </div>
+          </div>
+          <div class="askai-scroll">
+            <div class="empty-state" id="askaiEmpty">
+              <div class="empty-ico ico-sparkle">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4L12 3z"></path><path d="M19 14l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8z"></path></svg>
+              </div>
+              <div class="empty-title">Ask the AI copilot anything</div>
+              <div class="empty-sub">Paste something from the call, or try a suggestion below.</div>
+            </div>
+            <div class="askai-feed" id="askaiFeed"></div>
+            <div class="askai-chips">
+              <button class="chip" data-ask="Summarize this call in 3 bullet points for my manager">Summarize this call in 3 bullet points for my manager</button>
+              <button class="chip" data-ask="Draft a WhatsApp follow-up message to the customer">Draft a WhatsApp follow-up message to the customer</button>
+              <button class="chip" data-ask="What objection should I prepare for next?">What objection should I prepare for next?</button>
+            </div>
+          </div>
+          <div class="askai-input-row">
+            <input id="askaiInput" class="askai-input" placeholder="Ask the copilot…" autocomplete="off">
+            <button id="askaiSend" class="btn-primary icon-only" aria-label="Send">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { CaptureController } from './capture-client.js';
+
+    const API_BASE = 'http://localhost:8000';
+    const ASK_URL = `${API_BASE}/ask`;
+
+    // ---- element refs ----
+    const $ = (id) => document.getElementById(id);
+    const micToggle = $('micToggle'), sysToggle = $('sysToggle'), bothToggle = $('bothToggle');
+    const listenStatus = $('listenStatus');
+    const callId = $('callId'), callTimer = $('callTimer');
+    const transcript = $('transcript'), convoEmpty = $('convoEmpty');
+    const suggestionList = $('suggestionList'), sugEmpty = $('sugEmpty');
+    const intentLabel = $('intentLabel'), intentSelect = $('intentSelect'), intentSend = $('intentSend');
+    const readyStatus = $('readyStatus'), replayBtn = $('replayBtn');
+    const askaiFeed = $('askaiFeed'), askaiEmpty = $('askaiEmpty'), askaiInput = $('askaiInput'), askaiSend = $('askaiSend'), askaiNewThread = $('askaiNewThread');
+    const askaiThreadBadge = $('askaiThreadBadge'), askaiThreadSelect = $('askaiThreadSelect');
+    const profileBody = $('profileBody'), profileEmpty = $('profileEmpty'), profileFields = $('profileFields'), profileReload = $('profileReload');
+    const startCallBtn = $('startCallBtn'), endCallBtn = $('endCallBtn');
+
+    const SPEAKER_LABEL = { agent: 'Agent', customer: 'Customer' };
+    const TOOL_LABEL = { search_knowledge_base: '📚 Knowledge base', refine_last_answer: '✏️ Refine' };
+
+    let controller = null;
+    let timerHandle = null, elapsed = 0;
+    let lastTurnText = '';
+
+    // Ask-AI "thread" id — distinct from controller.sessionId (the live call).
+    // In-memory only: resets on page reload, matching controller.sessionId's own
+    // behavior. null until either a first advanced-mode message gets one back
+    // from the server, or "+" mints one immediately client-side.
+    let askAiSessionId = null;
+
+    // ---- capture / toggles ----
+    function ensureController() {
+      if (!controller) {
+        controller = new CaptureController(handleServerMessage);
+        callId.textContent = '#' + controller.sessionId.slice(0, 8);
+      }
+      return controller;
+    }
+
+    function syncToggles() {
+      const on = controller || { micOn: false, systemOn: false, anyOn: false };
+      setSwitch(micToggle, on.micOn);
+      setSwitch(sysToggle, on.systemOn);
+      setSwitch(bothToggle, on.micOn && on.systemOn);
+      startCallBtn.disabled = on.anyOn;   // already in a call
+      endCallBtn.disabled = !on.anyOn;    // no call to end
+      if (on.anyOn) {
+        listenStatus.classList.add('live');
+        listenStatus.innerHTML = '<span class="status-dot"></span> Listening';
+        startTimer();
+      } else {
+        listenStatus.classList.remove('live');
+        listenStatus.innerHTML = '<span class="status-dot"></span> Not listening';
+        stopTimer();
+      }
+    }
+
+    function setSwitch(chip, on) {
+      chip.classList.toggle('on', on);
+      chip.querySelector('.switch').dataset.on = on ? 'true' : 'false';
+    }
+
+    async function toggleMic() {
+      const c = ensureController();
+      try {
+        if (c.micOn) c.stopMic(); else await c.startMic();
+      } catch (e) { flashStatus(e.message); }
+      syncToggles();
+    }
+    async function toggleSys() {
+      const c = ensureController();
+      try {
+        if (c.systemOn) c.stopSystem(); else await c.startSystem();
+      } catch (e) { flashStatus(e.message); }
+      syncToggles();
+    }
+    async function toggleBoth() {
+      const c = ensureController();
+      const turnOn = !(c.micOn && c.systemOn);
+      try {
+        if (turnOn) { if (!c.micOn) await c.startMic(); if (!c.systemOn) await c.startSystem(); }
+        else c.stopAll();
+      } catch (e) { flashStatus(e.message); }
+      syncToggles();
+    }
+
+    micToggle.onclick = toggleMic;
+    sysToggle.onclick = toggleSys;
+    bothToggle.onclick = toggleBoth;
+
+    // Start call = begin the whole call (mic + customer audio). Robust: keeps
+    // whatever leg succeeds even if the other is denied/cancelled.
+    async function startCall() {
+      const c = ensureController();
+      try { if (!c.micOn) await c.startMic(); } catch (e) { flashStatus(e.message); }
+      try { if (!c.systemOn) await c.startSystem(); } catch (e) { flashStatus(e.message); }
+      if (c.anyOn) readyStatus.textContent = 'Ready';
+      syncToggles();
+    }
+    startCallBtn.onclick = startCall;
+
+    // ---- timer ----
+    function startTimer() {
+      if (timerHandle) return;
+      timerHandle = setInterval(() => {
+        elapsed++;
+        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const s = String(elapsed % 60).padStart(2, '0');
+        callTimer.textContent = `${m}:${s}`;
+      }, 1000);
+    }
+    function stopTimer() { if (timerHandle) { clearInterval(timerHandle); timerHandle = null; } }
+
+    // ---- incoming frames ----
+    function handleServerMessage(data) {
+      if (data.type === 'transcript') renderTranscript(data);
+      else if (data.type === 'suggestion') renderSuggestion(data);
+    }
+
+    function renderTranscript(data) {
+      convoEmpty.style.display = 'none';
+      lastTurnText = data.text;
+      const line = document.createElement('div');
+      line.className = `turn ${data.speaker}`;
+      const meta = document.createElement('div');
+      meta.className = 'turn-meta';
+      meta.textContent = SPEAKER_LABEL[data.speaker] || data.speaker;
+      const bubble = document.createElement('div');
+      bubble.className = 'turn-bubble';
+      bubble.textContent = data.text;
+      line.append(meta, bubble);
+      transcript.appendChild(line);
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    function renderSuggestion(data) {
+      sugEmpty.style.display = 'none';
+      readyStatus.textContent = 'Answered';
+      replayBtn.disabled = false;
+      if (data.query) intentLabel.textContent = 'Detected · ' + truncate(data.query, 40);
+
+      const card = document.createElement('div');
+      card.className = 'sug-card new';
+      const head = document.createElement('div');
+      head.className = 'sug-head';
+      const tag = document.createElement('span');
+      tag.className = 'sug-tag';
+      tag.title = data.query || '';
+      tag.textContent = data.query || '(question)';
+      const time = document.createElement('span');
+      time.className = 'sug-time';
+      time.textContent = new Date().toLocaleTimeString();
+      head.append(tag, time);
+      if (data.tool) {
+        const tool = document.createElement('span');
+        tool.className = 'sug-tool';
+        tool.textContent = TOOL_LABEL[data.tool] || data.tool;
+        head.append(tool);
+      }
+      const ans = document.createElement('p');
+      ans.className = 'sug-answer';
+      ans.textContent = data.answer;
+      const copy = document.createElement('button');
+      copy.className = 'copy-btn';
+      copy.textContent = 'Copy';
+      copy.onclick = () => { navigator.clipboard?.writeText(data.answer); copy.textContent = 'Copied'; setTimeout(() => copy.textContent = 'Copy', 1500); };
+      card.append(head, ans, copy);
+      suggestionList.prepend(card);
+      setTimeout(() => card.classList.remove('new'), 1200);
+    }
+
+    // ---- Ask AI / intent Send (POST /ask) ----
+    // Ask AI works with or without an active call (falls back to 'ask-adhoc'),
+    // so every function that talks to the Ask-AI endpoints (send, list threads,
+    // switch thread) must resolve the session id the SAME way — otherwise
+    // threads saved under one id silently never show up when looked up under
+    // another (this was the bug: loadAskAiSessions used to bail out entirely
+    // when no call was active, instead of also falling back to 'ask-adhoc').
+    function currentAskSessionId() {
+      return controller?.sessionId || 'ask-adhoc';
+    }
+
+    async function askCopilot(text, target, opts = {}) {
+      if (!text || !text.trim()) return;
+      const pending = appendAskCard(target, text, '…thinking', true);
+      await runAskRequest(pending, text, opts);
+    }
+
+    // Separated from askCopilot so the clarification flow (see
+    // setClarification above) can re-run the SAME request against the SAME
+    // card once the user picks an option, instead of spawning a new one —
+    // "the card then updates to the real answer" rather than a second card
+    // appearing below it.
+    async function runAskRequest(pending, text, opts = {}) {
+      const body = { question: text, session_id: currentAskSessionId() };
+      if (opts.advanced) {
+        body.advanced_filter = true;
+        body.ask_ai_session_id = askAiSessionId; // null on the thread's first message
+        if (opts.contextSource) body.context_source = opts.contextSource;
+      }
+      try {
+        const res = await fetch(ASK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (opts.advanced && data.ask_ai_session_id) {
+            askAiSessionId = data.ask_ai_session_id;
+            updateThreadBadge();
+            loadAskAiSessions(); // refresh dropdown so this thread's timestamp/entry updates
+          }
+          if (data.needs_clarification) {
+            pending.setClarification(data.clarification_options || [], (value) => {
+              pending.setPending();
+              runAskRequest(pending, text, { ...opts, contextSource: value });
+            });
+          } else {
+            pending.setAnswer(data.answer || '(no answer)');
+          }
+        } else {
+          pending.setAnswer('⚠ ' + (data.detail || 'request failed'), true);
+        }
+      } catch (e) {
+        pending.setAnswer('⚠ Could not reach the backend (/ask). Is the audio backend running on :8000?', true);
+      }
+    }
+
+    function appendAskCard(target, question, initial, isPending) {
+      if (target === askaiFeed) askaiEmpty.style.display = 'none';
+      const card = document.createElement('div');
+      card.className = 'sug-card new';
+      const head = document.createElement('div');
+      head.className = 'sug-head';
+      const tag = document.createElement('span');
+      tag.className = 'sug-tag';
+      tag.textContent = question;
+      head.append(tag);
+      const ans = document.createElement('p');
+      ans.className = 'sug-answer' + (isPending ? ' pending' : '');
+      ans.textContent = initial;
+      card.append(head, ans);
+      target.prepend(card);
+      setTimeout(() => card.classList.remove('new'), 1200);
+      return {
+        setAnswer(text, isErr) {
+          ans.classList.remove('pending');
+          if (isErr) ans.classList.add('err');
+          ans.textContent = text;
+        },
+        setPending() {
+          ans.classList.add('pending');
+          ans.textContent = '…thinking';
+        },
+        setClarification(options, onPick) {
+          ans.classList.remove('pending');
+          ans.textContent = '';
+          ans.append('Are you talking about: ');
+          for (const opt of options) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'clarify-btn';
+            btn.textContent = opt.label;
+            btn.onclick = () => onPick(opt.value);
+            ans.appendChild(btn);
+          }
+        },
+      };
+    }
+
+    intentSend.onclick = () => {
+      const intent = intentSelect.value;
+      const base = lastTurnText || '';
+      if (!base) { flashReady('Nothing to send yet — start the conversation first.'); return; }
+      askCopilot(`[Intent: ${intent}] ${base}`, suggestionList);
+      sugEmpty.style.display = 'none';
+    };
+
+    document.querySelectorAll('.chip').forEach((chip) => {
+      chip.onclick = () => askCopilot(chip.dataset.ask, askaiFeed, { advanced: true });
+    });
+    askaiSend.onclick = () => { const v = askaiInput.value; askaiInput.value = ''; askCopilot(v, askaiFeed, { advanced: true }); };
+    askaiInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { askaiSend.onclick(); } });
+
+    // ---- Ask-AI thread switcher (badge + dropdown) ----
+    function updateThreadBadge() {
+      askaiThreadBadge.textContent = askAiSessionId ? askAiSessionId.slice(0, 8) : 'New thread';
+    }
+
+    function formatThreadTimestamp(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d)) return '';
+      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function loadAskAiSessions() {
+      const sid = currentAskSessionId();
+      try {
+        const res = await fetch(`${API_BASE}/ask-ai/sessions?session_id=${sid}`);
+        if (!res.ok) { console.warn('loadAskAiSessions: request failed', res.status); return; }
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        askaiThreadSelect.innerHTML = '';
+        const newOpt = document.createElement('option');
+        newOpt.value = '';
+        newOpt.textContent = 'New thread';
+        askaiThreadSelect.appendChild(newOpt);
+        for (const s of sessions) {
+          const opt = document.createElement('option');
+          opt.value = s.ask_ai_session_id;
+          const stamp = formatThreadTimestamp(s.last_timestamp);
+          const preview = (s.last_query || '').slice(0, 30);
+          opt.textContent = preview ? `${stamp} · ${preview}` : stamp;
+          askaiThreadSelect.appendChild(opt);
+        }
+        askaiThreadSelect.value = askAiSessionId || '';
+      } catch (e) {
+        console.warn('loadAskAiSessions: could not reach backend', e);
+      }
+    }
+
+    async function switchAskAiThread(threadId) {
+      const sid = currentAskSessionId();
+      try {
+        const res = await fetch(`${API_BASE}/ask-ai/thread?session_id=${sid}&ask_ai_session_id=${threadId}`);
+        const data = await res.json();
+        if (!res.ok) { flashReady('⚠ Could not load that thread'); return; }
+        askaiFeed.innerHTML = '';
+        const turns = data.turns || [];
+        if (turns.length) askaiEmpty.style.display = 'none';
+        for (const turn of turns) {
+          appendAskCard(askaiFeed, turn.query, turn.answer, false);
+        }
+        askAiSessionId = threadId;
+        updateThreadBadge();
+      } catch (e) {
+        flashReady('⚠ Could not reach the backend (/ask-ai/thread)');
+      }
+    }
+
+    askaiThreadSelect.onchange = () => {
+      const value = askaiThreadSelect.value;
+      if (!value) {
+        askAiSessionId = null;
+        askaiFeed.innerHTML = '';
+        askaiEmpty.style.display = '';
+        updateThreadBadge();
+      } else {
+        switchAskAiThread(value);
+      }
+    };
+
+    askaiNewThread.onclick = () => {
+      askAiSessionId = crypto.randomUUID(); // same pattern as capture-client.js's makeSessionId()
+      askaiFeed.innerHTML = '';
+      askaiEmpty.style.display = '';
+      updateThreadBadge();
+      askaiThreadSelect.value = '';
+    };
+
+    // ---- Profile tab (GET /profile) ----
+    const PROFILE_LABELS = {
+      name: 'Name', age: 'Age', profession: 'Profession',
+      location: 'Location', policy_product: 'Policy product', category: 'Category',
+    };
+
+    async function loadProfile() {
+      const sid = controller?.sessionId;
+      if (!sid) { flashReady('Start a call first — no session yet.'); return; }
+      try {
+        const res = await fetch(`${API_BASE}/profile?session_id=${sid}`);
+        const data = await res.json();
+        if (!res.ok) { flashReady('⚠ Could not load profile'); return; }
+        renderProfile(data.profile || {});
+      } catch (e) {
+        flashReady('⚠ Could not reach the backend (/profile)');
+      }
+    }
+
+    function renderProfile(profile) {
+      profileEmpty.style.display = 'none';
+      profileFields.style.display = '';
+      profileFields.innerHTML = '';
+      for (const key of Object.keys(PROFILE_LABELS)) {
+        const row = document.createElement('div');
+        row.className = 'profile-row';
+        const label = document.createElement('span');
+        label.className = 'profile-label';
+        label.textContent = PROFILE_LABELS[key];
+        const value = document.createElement('span');
+        value.className = 'profile-value';
+        value.textContent = profile[key] || '—';
+        row.append(label, value);
+        profileFields.appendChild(row);
+      }
+    }
+
+    profileReload.onclick = loadProfile;
+
+    // ---- tabs ----
+    document.querySelectorAll('.tab').forEach((tab) => {
+      tab.onclick = () => {
+        document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+        const name = tab.dataset.tab;
+        document.querySelectorAll('.tab-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === name));
+        if (name === 'profile') loadProfile();
+        if (name === 'askai') loadAskAiSessions();
+      };
+    });
+
+    // ---- header actions ----
+    $('themeToggle').onclick = () => {
+      const root = document.documentElement;
+      root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    };
+
+    endCallBtn.onclick = () => {
+      const sid = controller?.sessionId;
+      controller?.stopAll();
+      if (sid) fetch(`${API_BASE}/session/${sid}/reset`, { method: 'POST' }).catch(() => {});
+      stopTimer();
+      elapsed = 0; callTimer.textContent = '00:00';
+      syncToggles();
+      readyStatus.textContent = 'Call ended';
+    };
+
+    replayBtn.onclick = () => { suggestionList.scrollTop = 0; };
+
+    // ---- small helpers ----
+    function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+    function flashStatus(msg) { listenStatus.innerHTML = '<span class="status-dot"></span> ' + msg; }
+    function flashReady(msg) { const prev = readyStatus.textContent; readyStatus.textContent = msg; setTimeout(() => readyStatus.textContent = prev, 2500); }
+
+    syncToggles();
+  </script>
+</body>
+</html>
