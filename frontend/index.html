@@ -91,12 +91,6 @@
         <span>Customer audio</span>
         <span class="switch" data-on="false"></span>
       </button>
-      <span class="dot-sep">•</span>
-      <button class="toggle-chip" id="bothToggle" type="button">
-        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1"></path><path d="M14 11a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1"></path></svg>
-        <span>Listen to both</span>
-        <span class="switch" data-on="false"></span>
-      </button>
     </div>
     <div class="controls-right">
       <span class="listen-status" id="listenStatus"><span class="status-dot"></span> Not listening</span>
@@ -123,6 +117,8 @@
         <div class="transcript-list" id="transcript"></div>
       </div>
     </section>
+
+    <div class="board-resizer" id="resizerLeft" role="separator" aria-orientation="vertical" aria-label="Resize Live Conversation panel"></div>
 
     <!-- Center: AI Copilot -->
     <section class="panel copilot-panel">
@@ -156,6 +152,8 @@
         </button>
       </div>
     </section>
+
+    <div class="board-resizer" id="resizerRight" role="separator" aria-orientation="vertical" aria-label="Resize Ask AI panel"></div>
 
     <!-- Right: Tabs -->
     <section class="panel tabs-panel">
@@ -212,8 +210,6 @@
             <div class="askai-feed" id="askaiFeed"></div>
             <div class="askai-chips">
               <button class="chip" data-ask="Summarize this call in 3 bullet points for my manager">Summarize this call in 3 bullet points for my manager</button>
-              <button class="chip" data-ask="Draft a WhatsApp follow-up message to the customer">Draft a WhatsApp follow-up message to the customer</button>
-              <button class="chip" data-ask="What objection should I prepare for next?">What objection should I prepare for next?</button>
             </div>
           </div>
           <label class="call-context-toggle" id="callContextToggleRow">
@@ -243,7 +239,7 @@
 
     // ---- element refs ----
     const $ = (id) => document.getElementById(id);
-    const micToggle = $('micToggle'), sysToggle = $('sysToggle'), bothToggle = $('bothToggle');
+    const micToggle = $('micToggle'), sysToggle = $('sysToggle');
     const listenStatus = $('listenStatus');
     const callId = $('callId'), callTimer = $('callTimer'), agentBadge = $('agentBadge');
     const conversation = $('conversation');
@@ -418,7 +414,6 @@
       const on = controller || { micOn: false, systemOn: false, anyOn: false };
       setSwitch(micToggle, on.micOn);
       setSwitch(sysToggle, on.systemOn);
-      setSwitch(bothToggle, on.micOn && on.systemOn);
       startCallBtn.disabled = on.anyOn;   // already in a call
       endCallBtn.disabled = !on.anyOn;    // no call to end
       // Nothing to include when there's no call — disable and uncheck rather
@@ -455,19 +450,8 @@
       } catch (e) { flashStatus(e.message); }
       syncToggles();
     }
-    async function toggleBoth() {
-      const c = ensureController();
-      const turnOn = !(c.micOn && c.systemOn);
-      try {
-        if (turnOn) { if (!c.micOn) await c.startMic(); if (!c.systemOn) await c.startSystem(); }
-        else c.stopAll();
-      } catch (e) { flashStatus(e.message); }
-      syncToggles();
-    }
-
     micToggle.onclick = toggleMic;
     sysToggle.onclick = toggleSys;
-    bothToggle.onclick = toggleBoth;
 
     // Start call = begin the whole call (mic + customer audio). Robust: keeps
     // whatever leg succeeds even if the other is denied/cancelled.
@@ -1028,6 +1012,63 @@
     // ---- small helpers ----
     function flashStatus(msg) { listenStatus.innerHTML = '<span class="status-dot"></span> ' + msg; }
     function flashReady(msg) { const prev = readyStatus.textContent; readyStatus.textContent = msg; setTimeout(() => readyStatus.textContent = prev, 2500); }
+
+    // ---- resizable board columns ----
+    // Only the left (conversation) and right (Ask AI/tabs) panels carry an
+    // explicit px width; the center copilot panel is flex:1 and just absorbs
+    // whatever space is left, so there's nothing to compute for it here.
+    const BOARD_WIDTHS_KEY = 'insureassist_board_widths';
+    const board = document.querySelector('.board');
+    const conversationPanel = document.querySelector('.conversation-panel');
+    const tabsPanel = document.querySelector('.tabs-panel');
+    const resizerLeft = $('resizerLeft'), resizerRight = $('resizerRight');
+
+    function restoreBoardWidths() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(BOARD_WIDTHS_KEY) || '{}');
+        if (saved.left) conversationPanel.style.flexBasis = saved.left + 'px';
+        if (saved.right) tabsPanel.style.flexBasis = saved.right + 'px';
+      } catch (e) { /* ignore malformed saved widths */ }
+    }
+    function saveBoardWidths() {
+      localStorage.setItem(BOARD_WIDTHS_KEY, JSON.stringify({
+        left: conversationPanel.getBoundingClientRect().width,
+        right: tabsPanel.getBoundingClientRect().width,
+      }));
+    }
+
+    // grow: 'right' means dragging the mouse right widens the panel (used for
+    // the left panel's resizer); 'left' means dragging the mouse left widens
+    // it (used for the right panel's resizer, which sits on its left edge).
+    function attachResizer(resizerEl, panelEl, { min, max, grow }) {
+      resizerEl.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = panelEl.getBoundingClientRect().width;
+        resizerEl.classList.add('dragging');
+        board.classList.add('resizing');
+
+        function onMove(ev) {
+          const delta = ev.clientX - startX;
+          const signedDelta = grow === 'right' ? delta : -delta;
+          const width = Math.min(max, Math.max(min, startWidth + signedDelta));
+          panelEl.style.flexBasis = width + 'px';
+        }
+        function onUp() {
+          resizerEl.classList.remove('dragging');
+          board.classList.remove('resizing');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          saveBoardWidths();
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    attachResizer(resizerLeft, conversationPanel, { min: 220, max: 560, grow: 'right' });
+    attachResizer(resizerRight, tabsPanel, { min: 280, max: 560, grow: 'left' });
+    restoreBoardWidths();
 
     syncToggles();
   </script>

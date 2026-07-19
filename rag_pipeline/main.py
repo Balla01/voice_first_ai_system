@@ -88,7 +88,7 @@ def rerank(results: list) -> list:
 # ── Parallel search ───────────────────────────────────────────────────────────
 
 def parallel_search(query: str, query_vec: list, history: RuntimeHistory, k: int = 4,
-                    docs_k: int = DOCS_SEARCH_K, doc_filter=None):
+                    docs_k: int = DOCS_SEARCH_K, doc_filter=None, timing: dict = None):
     """
     Fire all 3 searches concurrently.
     docs_k is decoupled from k (history/summary breadth) — defaults to
@@ -101,15 +101,31 @@ def parallel_search(query: str, query_vec: list, history: RuntimeHistory, k: int
     None, search_docs_scored auto-derives one from the query (USE_QUERY_FILTER).
     Docs are also cross-encoder reranked inside search_docs_scored (USE_RERANKER).
     Returns (history_ranked, summary_ranked, docs_raw).
+
+    timing (optional): if a dict is passed, populated in place with
+    history_retrieval_ms / summary_retrieval_ms / docs_retrieval_ms (each is
+    wall-clock elapsed from pool submission to that branch's own completion —
+    valid even though the 3 branches run concurrently, since each is measured
+    against its own future, not the others') plus the docs sub-stage keys
+    (embed_ms/filter_ms/qdrant_ms/merge_ms/rerank_ms) from search_docs_scored.
     """
+    t_pool_start = time.perf_counter()
+    docs_timing = {} if timing is not None else None
     with ThreadPoolExecutor(max_workers=3) as pool:
         fut_hist = pool.submit(history.search_history_scored,  query_vec, k)
         fut_summ = pool.submit(history.search_summary_scored,  query_vec, k)
-        fut_docs = pool.submit(history.search_docs_scored,     query, docs_k, doc_filter)
+        fut_docs = pool.submit(history.search_docs_scored,     query, docs_k, doc_filter, timing=docs_timing)
 
         history_results = fut_hist.result()
+        if timing is not None:
+            timing["history_retrieval_ms"] = (time.perf_counter() - t_pool_start) * 1000
         summary_results = fut_summ.result()
-        docs_results    = fut_docs.result()
+        if timing is not None:
+            timing["summary_retrieval_ms"] = (time.perf_counter() - t_pool_start) * 1000
+        docs_results = fut_docs.result()
+        if timing is not None:
+            timing["docs_retrieval_ms"] = (time.perf_counter() - t_pool_start) * 1000
+            timing.update(docs_timing)
 
     history_ranked = rerank(history_results)
     summary_ranked = rerank(summary_results)

@@ -88,6 +88,7 @@ Run:
 import asyncio
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -308,15 +309,26 @@ def _build_explicit_filter(request: "QueryRequest"):
     return Filter(must=conds) if conds else None
 
 
-def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None) -> str:
+def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None) -> Tuple[str, Dict]:
     """Embed + search + rerank + build_context — same steps as main.py's main(),
     synchronous/blocking. Used ONLY for the AI Copilot's own call-scoped
     suggestions (advanced_filter=False) — Ask-AI (advanced_filter=True) uses
     _thread_context() instead and never reaches this function; see module
-    docstring."""
+    docstring.
+
+    Returns (context, timing) — timing carries per-stage elapsed ms (see
+    _log_pipeline_timing) plus retrieval-count stats, for the structured
+    per-request timing log built in query()."""
+    timing: Dict = {}
+
+    t0 = time.perf_counter()
     query_vec = _embed([query])[0]
+    timing["query_embed_gte_ms"] = (time.perf_counter() - t0) * 1000
+
     recent_turns = history.get_recent_history(n=5)
-    history_ranked, summary_ranked, docs_ranked = parallel_search(query, query_vec, history, doc_filter=doc_filter)
+    history_ranked, summary_ranked, docs_ranked = parallel_search(
+        query, query_vec, history, doc_filter=doc_filter, timing=timing
+    )
 
     logger.info(f"[retrieval:docs_filter] explicit={'yes' if doc_filter is not None else 'no (auto LLM filter)'}")
     logger.info(f"[retrieval:recent_history] {len(recent_turns)} turn(s) (chronological, not reranked)")
@@ -326,7 +338,9 @@ def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None) -> s
     # two collections stay truncated since they're rarely what you're debugging.
     _log_chunks("docs", docs_ranked, full=DEBUG)
 
+    t_prompt0 = time.perf_counter()
     context = build_context(recent_turns, history_ranked, summary_ranked, docs_ranked, top_k=CONTEXT_TOP_K)
+    timing["prompt_construction_ms"] = (time.perf_counter() - t_prompt0) * 1000
 
     used_history = min(len(history_ranked), CONTEXT_TOP_K)
     used_summary = min(len(summary_ranked), CONTEXT_TOP_K)
@@ -340,11 +354,80 @@ def _retrieve_context(query: str, history: RuntimeHistory, doc_filter=None) -> s
         f"total_chunks_to_llm={len(recent_turns) + used_history + used_summary + used_docs}"
     )
 
-    return context
+    # No intent/trigger gate exists inside rag_pipeline for this flow either —
+    # every /query request that reaches here always embeds (BGE-M3) and
+    # searches the docs collection, regardless of query type. (Layer4's own
+    # "Smart Trigger Gate" lives upstream in auido_capture and decides whether
+    # to call this endpoint AT ALL for a given transcript turn — it is not a
+    # gate inside this function.)
+    timing["trigger_gate_ms"] = 0.0
+    timing["trigger_decision"] = "USE_RAG"
+    timing["trigger_reason"] = (
+        "No intent/trigger gate in rag_pipeline — docs retrieval always runs. "
+        "(auido_capture's Layer4 gate, if any, decides upstream whether to call this endpoint at all.)"
+    )
+
+    timing["history_chunks"] = len(history_ranked)
+    timing["summary_chunks"] = len(summary_ranked)
+    timing["docs_chunks"] = len(docs_ranked)
+    timing["docs_sent_to_llm"] = used_docs
+
+    return context, timing
+
+
+# Deterministic (regex-only, no LLM) pre-gate for Ask-AI's docs/web retrieval —
+# same rationale as email_trigger.py/ambiguous_reference.py: this is a
+# keyword-shaped signal ("is this just small talk?"), not a semantic judgment
+# call, so a free/instant regex beats spending a Groq round-trip (or worse, a
+# BGE-M3 embed + Qdrant query) to find out a greeting needs neither.
+#
+# Deliberately EXCLUDE-only: only skips retrieval for a narrow, well-defined
+# set of non-informational patterns (greetings/thanks/casual acknowledgements
+# and thread-mechanics questions like "what did I ask before?"). Anything else
+# — including odd or unrecognized phrasing — falls through to the existing
+# safe default of actually searching, so a real insurance question is never
+# accidentally starved of context just because the gate didn't recognize it.
+_GREETING_WORDS = (
+    r"hi|hello+|hey+|hiya|yo|namaste|"
+    r"good\s*(morning|afternoon|evening|night)|"
+    r"thanks?|thank\s*you|thx|ty|"
+    r"bye|goodbye|see\s*you|take\s*care|"
+    r"ok(ay)?|cool|great|nice|got\s*it|sounds\s*good|alright|"
+    r"how\s*are\s*you|what'?s\s*up"
+)
+_GREETING_RE = re.compile(rf"^\s*({_GREETING_WORDS})\s*[!.,?]*\s*$", re.IGNORECASE)
+
+_THREAD_MEMORY_RE = re.compile(
+    r"\b(what (did|have|has) (i|you|we) (ask|say|tell|talk)(ed|ing)?|"
+    r"what (was|is) (my|your|the|our)?\s*(last|previous|first)\s*(question|message|answer|query)|"
+    r"how many (question|message)s? (have|did|has) (i|you|we) (ask|send)|"
+    r"summarize (this|our) (conversation|chat|thread)|"
+    r"what.{0,20}(talk(ed)?|discuss(ed)?).{0,15}about|"
+    r"is this (a )?new thread)\b",
+    re.IGNORECASE,
+)
+
+
+def _needs_external_retrieval(query: str) -> Tuple[bool, str]:
+    """False for greetings/thanks/casual chit-chat and thread-memory questions
+    ("what did I ask before?", "is this a new thread?") — these need only the
+    LLM plus thread history (already always included, separately from this
+    gate). True for everything else, including real insurance questions,
+    off-domain questions that might need web search, and anything the gate
+    doesn't specifically recognize (safe default — see module comment above).
+
+    Returns (needs_retrieval, reason) — reason is a short human-readable label
+    for the structured per-request timing log (see _log_pipeline_timing)."""
+    q = query.strip()
+    if _GREETING_RE.match(q):
+        return False, "Greeting/casual chit-chat (regex gate)"
+    if _THREAD_MEMORY_RE.search(q):
+        return False, "Thread-memory question — answered from thread history only (regex gate)"
+    return True, "Needs external retrieval — insurance/product question or unrecognized phrasing (safe default)"
 
 
 def _thread_context(query: str, history: RuntimeHistory, agent_id: str, ask_ai_session_id: str,
-                     doc_filter=None, live_context: Optional[str] = None) -> str:
+                     doc_filter=None, live_context: Optional[str] = None) -> Tuple[str, Dict]:
     """The ONLY context builder for Ask-AI (advanced_filter=True): insurance
     product docs (global knowledge, not session-scoped) + this thread's own
     chat_bot_ask_ai memory (recent + semantically relevant past Q&A, scoped by
@@ -361,48 +444,107 @@ def _thread_context(query: str, history: RuntimeHistory, agent_id: str, ask_ai_s
     "Include Current Call Context" toggle) — appended as a clearly-labeled
     TEMPORARY section for this one request only. Never saved to chat_bot_ask_ai
     or anywhere else.
-    """
-    query_vec = _embed([query])[0]
 
-    docs_results = history.search_docs_scored(query, DOCS_SEARCH_K, doc_filter)
-    docs_ranked = [(text, score) for text, score, _ in docs_results]
-    _log_chunks("docs", docs_ranked, full=DEBUG)
-    context = build_context([], [], [], docs_ranked, top_k=CONTEXT_TOP_K)
+    Docs search and web-search classification are both skipped entirely for
+    greetings/thanks/casual chat and thread-memory questions — see
+    _needs_external_retrieval(). Thread memory (recent_qas/qa_ranked below)
+    always runs regardless — it's cheap (local Qdrant, no LLM call) and is
+    exactly what a memory question like "what did I ask before?" needs.
+
+    Returns (context, timing) — timing carries per-stage elapsed ms plus the
+    gate's decision/reason and retrieval-count stats, for the structured
+    per-request timing log built in query() (_log_pipeline_timing).
+    """
+    timing: Dict = {}
+
+    t0 = time.perf_counter()
+    query_vec = _embed([query])[0]
+    timing["query_embed_gte_ms"] = (time.perf_counter() - t0) * 1000
+
+    t_gate0 = time.perf_counter()
+    do_retrieval, gate_reason = _needs_external_retrieval(query)
+    timing["trigger_gate_ms"] = (time.perf_counter() - t_gate0) * 1000
+    timing["trigger_decision"] = "USE_RAG" if do_retrieval else "SKIP_RAG"
+    timing["trigger_reason"] = gate_reason
+    logger.info(f"[thread:retrieval_gate] query={query!r} needs_retrieval={do_retrieval} reason={gate_reason!r}")
+
+    context = ""
+    if do_retrieval:
+        docs_timing: Dict = {}
+        t_docs0 = time.perf_counter()
+        docs_results = history.search_docs_scored(query, DOCS_SEARCH_K, doc_filter, timing=docs_timing)
+        timing["docs_retrieval_ms"] = (time.perf_counter() - t_docs0) * 1000
+        timing.update(docs_timing)
+        docs_ranked = [(text, score) for text, score, _ in docs_results]
+        _log_chunks("docs", docs_ranked, full=DEBUG)
+
+        t_prompt0 = time.perf_counter()
+        context = build_context([], [], [], docs_ranked, top_k=CONTEXT_TOP_K)
+        timing["prompt_construction_ms"] = (time.perf_counter() - t_prompt0) * 1000
+        timing["docs_chunks"] = len(docs_ranked)
+        timing["docs_sent_to_llm"] = min(len(docs_ranked), CONTEXT_TOP_K)
+    else:
+        # Gate skipped retrieval entirely — BGE-M3 embed/Qdrant search/rerank
+        # never ran for this request, so every docs sub-timing is genuinely 0.
+        timing["docs_retrieval_ms"] = 0.0
+        timing["embed_ms"] = 0.0
+        timing["qdrant_ms"] = 0.0
+        timing["merge_ms"] = 0.0
+        timing["rerank_ms"] = 0.0
+        timing["prompt_construction_ms"] = 0.0
+        timing["docs_chunks"] = 0
+        timing["docs_sent_to_llm"] = 0
 
     extra = []
 
+    t_hist0 = time.perf_counter()
     recent_qas = _ask_ai_store.get_recent(agent_id, ask_ai_session_id, n=5)
+    timing["history_retrieval_ms"] = (time.perf_counter() - t_hist0) * 1000
     logger.info(f"[thread] agent={agent_id} thread={ask_ai_session_id} recent={len(recent_qas)} turn(s)")
     if recent_qas:
         extra.append("--- Recent turns in this Ask-AI thread (chronological) ---")
         extra.extend(f"  {qa}" for qa in recent_qas)
 
+    t_summ0 = time.perf_counter()
     qa_ranked = _ask_ai_store.search_relevant(agent_id, ask_ai_session_id, query_vec, k=CONTEXT_TOP_K)
+    timing["summary_retrieval_ms"] = (time.perf_counter() - t_summ0) * 1000
     _log_chunks("thread_relevant", [(text, score) for text, score, _ts in qa_ranked])
     if qa_ranked:
         extra.append("--- Semantically relevant past turns in this thread ---")
         extra.extend(f"  • {text}" for text, _score, _ts in qa_ranked)
 
-    web_triggered = classify_web_search(query)
-    logger.info(f"[thread:web_search_trigger] {web_triggered}")
-    if web_triggered:
-        try:
-            web_text = web_search_answer(query)
-        except Exception as e:
-            logger.warning(f"[thread:web_search] failed: {e}")
-            web_text = ""
-        if web_text:
-            extra.append("--- Live web search results ---")
-            extra.append(f"  {web_text}")
+    timing["history_chunks"] = len(recent_qas)
+    timing["summary_chunks"] = len(qa_ranked)
+
+    if do_retrieval:
+        t_web_gate0 = time.perf_counter()
+        web_triggered = classify_web_search(query)
+        timing["web_search_gate_ms"] = (time.perf_counter() - t_web_gate0) * 1000
+        logger.info(f"[thread:web_search_trigger] {web_triggered}")
+        if web_triggered:
+            t_web0 = time.perf_counter()
+            try:
+                web_text = web_search_answer(query)
+            except Exception as e:
+                logger.warning(f"[thread:web_search] failed: {e}")
+                web_text = ""
+            timing["web_search_ms"] = (time.perf_counter() - t_web0) * 1000
+            if web_text:
+                extra.append("--- Live web search results ---")
+                extra.append(f"  {web_text}")
+    else:
+        logger.info("[thread:web_search_trigger] skipped (retrieval gate)")
 
     if live_context:
         extra.append("--- Live call context (temporary — this request only, not saved) ---")
         extra.append(live_context)
 
+    t_prompt1 = time.perf_counter()
     if extra:
         context += ("\n" if context else "") + "\n".join(extra)
+    timing["prompt_construction_ms"] += (time.perf_counter() - t_prompt1) * 1000
 
-    return context
+    return context, timing
 
 
 EMAIL_SUBJECT_QUERY_CHARS = 60
@@ -433,6 +575,57 @@ def _send_answer_email(recipient: str, query: str, answer: str) -> None:
             logger.warning(f"[advanced:email] failed to send to {recipient}: {e}")
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def _log_pipeline_timing(query: str, session_label: str, timing: Dict, total_ms: float) -> None:
+    """Structured, comparable-across-requests timing log for one /query
+    request (both advanced_filter modes). All *_ms values come from
+    time.perf_counter() deltas captured at each stage; a stage that never ran
+    for this request (e.g. docs retrieval skipped by the Ask-AI trigger gate,
+    or reranking when USE_RERANKER is off) defaults to 0.0/0 rather than being
+    omitted, so every request logs the same fixed set of lines and stays
+    diffable across requests."""
+
+    def ms(key: str) -> float:
+        return timing.get(key, 0.0)
+
+    def count(key: str) -> int:
+        return timing.get(key, 0)
+
+    lines = [
+        "================ ASK AI REQUEST ================",
+        f'Query              : "{query}"',
+        f"Session            : {session_label}",
+        "",
+        "TIMING",
+        "-----------------------------------------------",
+        f"Intent / Trigger Gate      : {ms('trigger_gate_ms'):.1f} ms",
+        f"History Retrieval          : {ms('history_retrieval_ms'):.1f} ms",
+        f"Summary Retrieval          : {ms('summary_retrieval_ms'):.1f} ms",
+        f"Query Embedding (BGE-M3)   : {ms('embed_ms'):.1f} ms",
+        f"Docs Retrieval (Qdrant)    : {ms('qdrant_ms'):.1f} ms",
+        f"Docs Reranking             : {ms('rerank_ms'):.1f} ms",
+        f"Prompt Construction        : {ms('prompt_construction_ms'):.1f} ms",
+        f"Groq API                   : {ms('groq_ms'):.1f} ms",
+        f"Response Parsing           : {ms('response_parsing_ms'):.1f} ms",
+        "",
+        f"TOTAL BACKEND              : {total_ms:.1f} ms",
+        "===============================================",
+        "",
+        f"Trigger Decision : {timing.get('trigger_decision', 'USE_RAG')}",
+        f"Reason           : {timing.get('trigger_reason', 'n/a')}",
+        "",
+        f"History Chunks Retrieved : {count('history_chunks')}",
+        f"Summary Chunks Retrieved : {count('summary_chunks')}",
+        f"Docs Retrieved           : {count('docs_chunks')}",
+        f"Docs Sent to LLM         : {count('docs_sent_to_llm')}",
+        "",
+        f"Embedding Time           : {ms('embed_ms'):.1f} ms",
+        f"Qdrant Search Time       : {ms('qdrant_ms'):.1f} ms",
+        f"Hybrid Merge Time        : {ms('merge_ms'):.1f} ms",
+        f"Rerank Time              : {ms('rerank_ms'):.1f} ms",
+    ]
+    logger.info("\n" + "\n".join(lines))
 
 
 @app.post("/query")
@@ -472,12 +665,13 @@ async def query(request: QueryRequest):
     # auto-triggered suggestions (advanced_filter=False) stay call-scoped via
     # RuntimeHistory, unchanged.
     if request.advanced_filter:
+        session_label = f"agent={request.agent_id} thread={ask_ai_session_id}"
         # RuntimeHistory here is used ONLY for its shared docs_client (product
         # knowledge search, global and session-independent) — never its
         # session-scoped recent_turns/history/summary methods, and .add() is
         # never called on it for Ask-AI turns.
         history = _get_history(request.agent_id, request.agent_id)
-        context = await asyncio.to_thread(
+        context, timing = await asyncio.to_thread(
             _thread_context, request.query, history, request.agent_id, ask_ai_session_id,
             doc_filter, request.live_context,
         )
@@ -486,8 +680,9 @@ async def query(request: QueryRequest):
             raise HTTPException(
                 status_code=400, detail="session_id and customer_id are required when advanced_filter=False"
             )
+        session_label = f"session={request.session_id} customer={request.customer_id}"
         history = _get_history(request.session_id, request.customer_id)
-        context = await asyncio.to_thread(_retrieve_context, request.query, history, doc_filter)
+        context, timing = await asyncio.to_thread(_retrieve_context, request.query, history, doc_filter)
     t_retrieval = time.perf_counter()
 
     # Detected BEFORE the LLM call (not after, as originally) so the system
@@ -495,22 +690,27 @@ async def query(request: QueryRequest):
     # instruction — otherwise the raw query text reads to the LLM as something
     # it must fulfill itself, and it responds with an "I can't send emails"
     # disclaimer instead of the actual answer. See EMAIL_HANDLING_NOTE.
+    t_prompt0 = time.perf_counter()
     email_recipient = detect_email_request(request.query) if request.advanced_filter else None
     system_prompt = None
     if request.advanced_filter:
         system_prompt = ADVANCED_SYSTEM_PROMPT + (EMAIL_HANDLING_NOTE if email_recipient else "")
+    timing["prompt_construction_ms"] = timing.get("prompt_construction_ms", 0.0) + (time.perf_counter() - t_prompt0) * 1000
 
     if request.stream:
         return StreamingResponse(
-            _stream_answer(request.query, context, t_start, t_retrieval,
+            _stream_answer(request.query, context, t_start, t_retrieval, timing, session_label,
                            system_prompt, request.advanced_filter, history,
                            request.agent_id, ask_ai_session_id, email_recipient),
             media_type="text/event-stream",
         )
 
+    t_groq0 = time.perf_counter()
     answer = await asyncio.to_thread(call_llm, request.query, context, system_prompt)
-    t_end = time.perf_counter()
+    t_groq1 = time.perf_counter()
+    timing["groq_ms"] = (t_groq1 - t_groq0) * 1000
 
+    t_parse0 = time.perf_counter()
     if not request.advanced_filter:
         await asyncio.to_thread(history.add, "user", request.query)
         await asyncio.to_thread(history.add, "assistant", answer)
@@ -525,6 +725,10 @@ async def query(request: QueryRequest):
             # text for them to review.
             needs_email_confirmation = True
             pending_email = {"to": email_recipient, "subject": _derive_email_subject(request.query)}
+    t_end = time.perf_counter()
+    timing["response_parsing_ms"] = (t_end - t_parse0) * 1000
+
+    _log_pipeline_timing(request.query, session_label, timing, (t_end - t_start) * 1000)
 
     return QueryResponse(
         answer=answer,
@@ -537,19 +741,22 @@ async def query(request: QueryRequest):
     )
 
 
-def _stream_answer(query: str, context: str, t_start: float, t_retrieval: float,
+def _stream_answer(query: str, context: str, t_start: float, t_retrieval: float, timing: Dict, session_label: str,
                    system_prompt: str = None, advanced_filter: bool = False,
                    history: RuntimeHistory = None, agent_id: str = None, ask_ai_session_id: str = None,
                    email_recipient: str = None):
     """Sync generator (Starlette runs it in a threadpool) — yields SSE token events, then a final done event."""
+    t_groq0 = time.perf_counter()
     parts = []
     for token in stream_llm_chunks(query, context, system_prompt):
         parts.append(token)
         yield f"data: {json.dumps({'token': token})}\n\n"
 
     answer = "".join(parts)
-    t_end = time.perf_counter()
+    t_groq1 = time.perf_counter()
+    timing["groq_ms"] = (t_groq1 - t_groq0) * 1000
 
+    t_parse0 = time.perf_counter()
     if not advanced_filter and history is not None:
         history.add("user", query)
         history.add("assistant", answer)
@@ -564,6 +771,10 @@ def _stream_answer(query: str, context: str, t_start: float, t_retrieval: float,
             # actually dispatch it.
             needs_email_confirmation = True
             pending_email = {"to": email_recipient, "subject": _derive_email_subject(query)}
+    t_end = time.perf_counter()
+    timing["response_parsing_ms"] = (t_end - t_parse0) * 1000
+
+    _log_pipeline_timing(query, session_label, timing, (t_end - t_start) * 1000)
 
     done_payload = {
         "answer": answer,

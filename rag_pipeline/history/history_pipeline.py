@@ -17,9 +17,10 @@ import logging
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -480,7 +481,8 @@ class RuntimeHistory:
         )
         return [(r.payload.get("text", ""), r.score, "") for r in response.points]
 
-    def search_docs_scored(self, query: str, k: int = 5, doc_filter=None, auto_filter: bool = True) -> List[tuple]:
+    def search_docs_scored(self, query: str, k: int = 5, doc_filter=None, auto_filter: bool = True,
+                            timing: Optional[dict] = None) -> List[tuple]:
         """
         Full docs retrieval, all four features:
           (a) hybrid dense+sparse search  (b) RRF fusion
@@ -494,29 +496,57 @@ class RuntimeHistory:
 
         Embeds `query` with BGE-M3 (docs use a different model than history/summary).
         Returns (text, score, timestamp="") — timestamp always empty for docs.
+
+        timing (optional): if a dict is passed, it is populated in place with
+        elapsed milliseconds for each sub-stage — embed_ms (BGE-M3 embedding),
+        filter_ms (auto_docs_filter LLM call, only present when it actually
+        runs), qdrant_ms (the hybrid dense+sparse + RRF query_points call —
+        note RRF fusion (b) happens server-side inside this same call, so it
+        has no separate cost of its own), merge_ms (time spent on the 0-hit
+        unfiltered fallback re-query, 0.0 when the first query already had
+        hits), rerank_ms (cross-encoder rerank, 0.0 when USE_RERANKER is off).
+        Callers that don't care about the breakdown simply omit `timing`.
         """
         try:
+            t0 = time.perf_counter()
             dense_vec, sparse_vec = embed_query_hybrid(query)
+            if timing is not None:
+                timing["embed_ms"] = (time.perf_counter() - t0) * 1000
 
             # (c) metadata filter: use the caller's, else auto-derive from the query.
             if doc_filter is None and auto_filter and USE_QUERY_FILTER:
+                t_filter0 = time.perf_counter()
                 from query_understanding import auto_docs_filter
                 doc_filter, _desc = auto_docs_filter(query, self._known_plans())
+                if timing is not None:
+                    timing["filter_ms"] = (time.perf_counter() - t_filter0) * 1000
 
             # (a)+(b) hybrid RRF; pull a wider pool when a reranker will trim it.
             pool = RERANK_CANDIDATE_POOL if USE_RERANKER else k
+            t_q0 = time.perf_counter()
             fused = self._hybrid_docs_search(dense_vec, sparse_vec, pool, doc_filter)
+            if timing is not None:
+                timing["qdrant_ms"] = (time.perf_counter() - t_q0) * 1000
+                timing["merge_ms"] = 0.0
 
             # Filtering must never make results worse: fall back to unfiltered on 0 hits.
             if not fused and doc_filter is not None:
+                t_fb0 = time.perf_counter()
                 fused = self._hybrid_docs_search(dense_vec, sparse_vec, pool, None)
+                if timing is not None:
+                    timing["merge_ms"] = (time.perf_counter() - t_fb0) * 1000
 
             # (d) cross-encoder rerank the shortlist, then truncate to k.
             if USE_RERANKER and fused:
+                t_r0 = time.perf_counter()
                 from data_dump.reranker import rerank
                 reranked = rerank(query, [(t, s) for t, s, _ in fused], top_k=k)
+                if timing is not None:
+                    timing["rerank_ms"] = (time.perf_counter() - t_r0) * 1000
                 return [(t, s, "") for t, s in reranked]
 
+            if timing is not None:
+                timing["rerank_ms"] = 0.0
             return fused[:k]
         except Exception as e:
             # Previously silent (bare `except: return []`) — a missing/broken
