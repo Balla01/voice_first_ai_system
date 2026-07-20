@@ -12,7 +12,11 @@
 // denying the system-audio share picker (or the mic prompt) only takes down
 // that leg, not the whole call.
 
-const BACKEND_WS_BASE = 'ws://localhost:8000/ws/audio'; // use wss:// only once backend is served over TLS
+// Same host the page itself was loaded from — see index.html's API_BASE for
+// why this can't be a hardcoded "localhost" (breaks the moment the page is
+// viewed from anywhere other than the machine running the containers).
+// Use wss:// only once backend is served over TLS.
+const BACKEND_WS_BASE = `ws://${window.location.hostname}:8000/ws/audio`;
 const SAMPLE_RATE = 16000;
 
 // The audio worklet posts a message roughly every ~128 samples (~8ms at

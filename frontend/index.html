@@ -233,7 +233,12 @@
   <script type="module">
     import { CaptureController } from './capture-client.js';
 
-    const API_BASE = 'http://localhost:8000';
+    // Same host the page itself was loaded from (works whether that's
+    // localhost, the Docker host's hostname, or its IP), not a hardcoded
+    // "localhost" — which only ever means the BROWSER's own machine and
+    // breaks the moment frontend/auido_capture are viewed from anywhere
+    // other than the machine actually running the containers.
+    const API_BASE = `http://${window.location.hostname}:8000`;
     const ASK_URL = `${API_BASE}/ask`;
     const AGENT_STORAGE_KEY = 'insureassist_agent_id';
 
