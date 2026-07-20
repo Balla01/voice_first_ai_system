@@ -205,3 +205,4 @@ Desktop.ini
 # (see rag_pipeline/.dockerignore, which does NOT exclude these).
 rag_pipeline/data/
 rag_pipeline/vector_data_docs/
+auido_capture/voice_agent_twilio_converation.txt
