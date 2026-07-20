@@ -1,0 +1,11 @@
+# VCS / IDE / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Old reference UI — not part of current work (see CLAUDE.md)
+insureassist-react/

@@ -1,0 +1,58 @@
+# Brings up all three InsureAssist AI services together (see CLAUDE.md's
+# architecture diagram): frontend (:5500) -> auido_capture (:8000) ->
+# rag_pipeline (:8001).
+#
+# Prerequisites: rag_pipeline/.env and auido_capture/.env must already exist
+# locally (both are gitignored, no .env.example committed — see CLAUDE.md's
+# "Env vars" section for the full key list each one needs).
+#
+# rag_pipeline also expects its vector store already built into
+# rag_pipeline/data/ and rag_pipeline/vector_data_docs/ (gitignored, baked
+# into that image via COPY — see rag_pipeline/Dockerfile) — run
+# run_data_dump.py + run_pipeline.py first if those don't exist yet.
+#
+# Usage:
+#   docker compose up --build
+
+services:
+  rag_pipeline:
+    build: ./rag_pipeline
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./rag_pipeline/.env
+    volumes:
+      # Persists the ~4GB HF model cache across rebuilds/restarts — without
+      # this every `docker compose up --build` re-downloads gte-large-en-v1.5
+      # + BGE-M3 (see rag_pipeline/Dockerfile's own note on this).
+      - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  auido_capture:
+    build: ./auido_capture
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./auido_capture/.env
+    environment:
+      # Overrides the .env value (if any) / the http://127.0.0.1:8001
+      # default — inside compose's network, rag_pipeline is only reachable
+      # by its service name, not localhost.
+      LAYER5_URL: http://rag_pipeline:8001
+    depends_on:
+      - rag_pipeline
+    restart: unless-stopped
+    # No volume for layer3_history.db: it's recreated fresh in the container
+    # on each run (see CLAUDE.md's Postgres->SQLite gotcha). Add a bind mount
+    # here if call history needs to survive container recreation.
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5500:5500"
+    depends_on:
+      - auido_capture
+    restart: unless-stopped
+
+volumes:
+  hf_cache:

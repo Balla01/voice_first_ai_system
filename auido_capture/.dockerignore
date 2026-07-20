@@ -1,0 +1,31 @@
+# Secrets — pass real values via `docker run --env-file` / compose instead
+.env
+.env.*
+
+# Python cruft
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Local venvs (never copy a Windows venv into a Linux image)
+venv/
+.venv/
+env/
+
+# VCS / IDE / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Local SQLite state — created fresh in the container (or volume-mounted)
+layer3_history.db
+layer3_history.db-shm
+layer3_history.db-wal
+
+# Stray in-repo notes/logs, not needed to serve the API
+voice_agent_twilio_converation.txt
+temp.py
