@@ -1,8 +1,15 @@
 # PDF Processing
 pdfplumber>=0.10.0
-# Embeddings
+# Embeddings — all 4 model-loading sites in this service:
+#   Alibaba-NLP/gte-large-en-v1.5 (history/summary)  -> sentence-transformers
+#   BAAI/bge-m3 (docs, hybrid dense+sparse)           -> FlagEmbedding
+#   BAAI/bge-reranker-v2-m3 (USE_RERANKER)            -> transformers
+#   Qwen/Qwen3.5-0.8B (data_dump/metadata_enricher.py, USE_LLM_METADATA) -> torch + transformers + accelerate
+torch>=2.7.0            # api.py's torch.set_num_threads() + backend for all of the below (CPU build; `pip install torch` alone is enough outside Docker)
 sentence-transformers>=2.2.0
-FlagEmbedding==1.4.0   # BGE-M3 hybrid dense+sparse doc embeddings — search_docs_scored() needs this
+FlagEmbedding==1.4.0    # BGE-M3 hybrid dense+sparse doc embeddings — search_docs_scored() needs this
+transformers>=4.40.0    # reranker.py's AutoTokenizer/AutoModelForSequenceClassification + metadata_enricher.py's AutoProcessor/AutoModelForImageTextToText
+accelerate>=0.30.0      # metadata_enricher.py's Qwen model needs this for device_map= (USE_LLM_METADATA=True)
 # Vector DB
 qdrant-client>=1.7.0
 # LLM API
@@ -16,3 +23,8 @@ scipy>=1.7.0
 # Parquet output
 pandas>=2.0.0
 pyarrow>=14.0.0
+# Ask-AI web search (web_search_call.py) — imported at api.py module load, so
+# missing any of these three breaks the whole app's startup, not just search.
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+ddgs>=9.0.0
